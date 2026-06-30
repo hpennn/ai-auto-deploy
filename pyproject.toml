@@ -1,0 +1,14 @@
+[project]
+name = "ai-auto-deploy"
+version = "1.0.0"
+description = "智能一键部署工具 - 自动识别项目类型，一键部署到云服务器/Cloudflare/Vercel"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+
+[project.scripts]
+ai-deploy = "src.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
