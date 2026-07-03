@@ -18,11 +18,12 @@ from web.api.servers import router as servers_router
 from web.api.fix import router as fix_router
 from web.api.generate import router as generate_router
 from web.api.payment import router as payment_router
+from web.api.admin import router as admin_router
 
 app = FastAPI(
     title="AI Auto Deploy",
     description="智能一键部署工具 - Web API",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 # CORS
@@ -40,11 +41,12 @@ app.include_router(servers_router, prefix="/api/servers", tags=["servers"])
 app.include_router(fix_router, prefix="/api/fix", tags=["fix"])
 app.include_router(generate_router, prefix="/api/generate", tags=["generate"])
 app.include_router(payment_router, prefix="/api/payment", tags=["payment"])
+app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 
 
 @app.get("/")
 async def root():
-    return {"message": "AI Auto Deploy API", "version": "1.1.0"}
+    return {"message": "AI Auto Deploy API", "version": "1.2.0"}
 
 
 @app.get("/api/health")
