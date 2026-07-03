@@ -1,0 +1,237 @@
+"""
+Generate Project API routes - AI 自动生成项目代码
+"""
+
+import os
+import re
+import json
+import zipfile
+import tempfile
+from typing import Optional
+
+import requests
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+from web.database import is_paid
+
+router = APIRouter()
+
+# 豆包 AI 配置
+ARK_API_KEY = "ark-4f063f47-ee3d-45a2-a6db-677cc71cf784-041e9"
+DOUBAO_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3"
+DOUBAO_MODEL_ID = "ep-20260623003404-7lqtt"
+
+# 技术栈模板
+TECH_STACKS = {
+    "frontend": {
+        "vue3": {"label": "Vue 3 + Vite", "desc": "Vue 3 组合式 API + Vite 构建工具"},
+        "react": {"label": "React 18", "desc": "React 18 + Hooks + Vite"},
+        "html": {"label": "原生 HTML/CSS/JS", "desc": "纯前端，无框架依赖"},
+    },
+    "backend": {
+        "fastapi": {"label": "FastAPI", "desc": "Python 异步框架，自动生成 API 文档"},
+        "flask": {"label": "Flask", "desc": "Python 轻量级 Web 框架"},
+        "express": {"label": "Express.js", "desc": "Node.js 最小化 Web 框架"},
+    },
+    "fullstack": {
+        "nextjs": {"label": "Next.js", "desc": "React 全栈框架，支持 SSR/SSG"},
+        "nuxtjs": {"label": "Nuxt.js", "desc": "Vue 全栈框架，支持 SSR/SSG"},
+    },
+}
+
+
+# ============ Models ============
+
+class GenerateProjectRequest(BaseModel):
+    description: str
+    project_type: str  # "frontend" | "backend" | "fullstack"
+    tech_stack: str    # e.g. "vue3", "react", "fastapi", etc.
+    user_id: Optional[str] = None
+
+
+class GenerateFileItem(BaseModel):
+    filename: str
+    content: str
+
+
+class DownloadProjectRequest(BaseModel):
+    files: list[GenerateFileItem]
+    project_name: Optional[str] = None
+
+
+# ============ AI 调用 ============
+
+def call_doubao_api(messages: list, temperature: float = 0.3) -> str:
+    """调用豆包 API"""
+    try:
+        response = requests.post(
+            f"{DOUBAO_ENDPOINT}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {ARK_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": DOUBAO_MODEL_ID,
+                "messages": messages,
+                "temperature": temperature,
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="AI 生成超时，请稍后重试")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI 调用失败: {str(e)}")
+
+
+def parse_generated_files(content: str) -> list:
+    """从 AI 返回的内容中解析文件列表"""
+    files = []
+
+    # Pattern 1: === filename ===
+    pattern1 = re.compile(r'={3,}\s*(.+?)\s*={3,}\s*\n(.*?)(?={3,}\s*.+?\s*={3,}|\Z)', re.DOTALL)
+    matches = pattern1.findall(content)
+    if matches:
+        for filename, file_content in matches:
+            files.append({"filename": filename.strip(), "content": file_content.strip()})
+        return files
+
+    # Pattern 2: ```lang:filename
+    pattern2 = re.compile(r'```(\w+):([^\n`]+)\n(.*?)```', re.DOTALL)
+    matches = pattern2.findall(content)
+    if matches:
+        for lang, filename, file_content in matches:
+            files.append({"filename": filename.strip(), "content": file_content.strip()})
+        return files
+
+    # Pattern 3: ## filename
+    pattern3 = re.compile(r'^##\s+(.+?)\s*\n```[\w]*\n(.*?)```', re.DOTALL | re.MULTILINE)
+    matches = pattern3.findall(content)
+    if matches:
+        for filename, file_content in matches:
+            files.append({"filename": filename.strip(), "content": file_content.strip()})
+        return files
+
+    # Fallback
+    if content.strip():
+        files.append({"filename": "README.md", "content": content.strip()})
+
+    return files
+
+
+def build_prompt(description: str, project_type: str, tech_stack: str) -> str:
+    """构建 AI 生成 prompt"""
+    stack_info = TECH_STACKS.get(project_type, {}).get(tech_stack, {})
+    stack_label = stack_info.get("label", tech_stack)
+    stack_desc = stack_info.get("desc", "")
+
+    type_labels = {"frontend": "前端", "backend": "后端", "fullstack": "全栈"}
+    type_label = type_labels.get(project_type, project_type)
+
+    prompt = (
+        "你是一个专业的项目代码生成器。请根据以下需求生成完整的项目代码。\n\n"
+        "## 需求\n"
+        f"- 项目描述: {description}\n"
+        f"- 项目类型: {type_label}\n"
+        f"- 技术栈: {stack_label} ({stack_desc})\n\n"
+        "## 输出格式要求\n"
+        "你必须严格按照以下格式输出每个文件：\n\n"
+        "=== 文件路径/文件名 ===\n"
+        "文件完整内容\n\n"
+        "每个文件之间用 === 文件名 === 分隔。\n\n"
+        "## 生成要求\n"
+        "1. 生成完整、可运行的项目代码\n"
+        "2. 包含必要的配置文件（package.json / requirements.txt 等）\n"
+        "3. 包含 README.md 说明文件\n"
+        "4. 代码要有适当的注释\n"
+        "5. 确保项目结构合理\n"
+        f"6. {type_label}项目至少包含 3-5 个文件\n"
+        "7. 所有代码必须是完整的，不能有占位符或 TODO\n"
+    )
+    return prompt
+
+
+# ============ Routes ============
+
+@router.post("/project")
+async def generate_project(req: GenerateProjectRequest):
+    """AI 生成项目"""
+    # Check payment
+    if req.user_id and not is_paid(req.user_id):
+        raise HTTPException(status_code=402, detail="该功能需要付费使用")
+
+    if not req.description.strip():
+        raise HTTPException(status_code=400, detail="请输入项目描述")
+
+    if req.project_type not in TECH_STACKS:
+        raise HTTPException(status_code=400, detail="无效的项目类型")
+
+    valid_stacks = list(TECH_STACKS[req.project_type].keys())
+    if req.tech_stack not in valid_stacks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的技术栈，可选: {', '.join(valid_stacks)}",
+        )
+
+    # Build prompt and call AI
+    prompt = build_prompt(req.description, req.project_type, req.tech_stack)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一个专业的项目代码生成器。你只输出代码文件，每个文件用 "
+                "=== 文件路径/文件名 === 分隔。不要输出任何多余的解释文字。"
+                "只输出格式化的文件内容，确保每个文件都是完整可运行的。"
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    content = call_doubao_api(messages, temperature=0.3)
+    files = parse_generated_files(content)
+
+    if not files:
+        raise HTTPException(status_code=500, detail="AI 生成结果为空，请重试")
+
+    return {
+        "files": files,
+        "total": len(files),
+        "description": req.description,
+        "project_type": req.project_type,
+        "tech_stack": req.tech_stack,
+    }
+
+
+@router.get("/stacks")
+async def get_stacks():
+    """获取可用技术栈"""
+    return {"stacks": TECH_STACKS}
+
+
+@router.post("/download")
+async def download_project(req: DownloadProjectRequest):
+    """下载生成的项目为 zip"""
+    if not req.files:
+        raise HTTPException(status_code=400, detail="没有可下载的文件")
+
+    project_name = req.project_name or "generated-project"
+
+    tmp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(tmp_dir, f"{project_name}.zip")
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in req.files:
+                zf.writestr(f.filename, f.content)
+
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=f"{project_name}.zip",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"打包失败: {str(e)}")
