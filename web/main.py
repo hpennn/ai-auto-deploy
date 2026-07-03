@@ -16,6 +16,7 @@ sys.path.insert(0, project_root)
 
 from web.api.deploy import router as deploy_router
 from web.api.servers import router as servers_router
+from web.api.fix import router as fix_router
 
 app = FastAPI(
     title="AI Auto Deploy",
@@ -35,6 +36,7 @@ app.add_middleware(
 # Routes
 app.include_router(deploy_router, prefix="/api/deploy", tags=["deploy"])
 app.include_router(servers_router, prefix="/api/servers", tags=["servers"])
+app.include_router(fix_router, prefix="/api/fix", tags=["fix"])
 
 
 @app.get("/")

@@ -8,6 +8,22 @@
         <span class="version">v1.0</span>
       </div>
       <div class="header-right">
+        <div class="tab-bar">
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'deploy' }"
+            @click="activeTab = 'deploy'"
+          >
+            📦 部署
+          </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'fix' }"
+            @click="activeTab = 'fix'"
+          >
+            🔧 代码检测
+          </button>
+        </div>
         <el-tag type="success" effect="plain" round>
           <el-icon><Check /></el-icon>
           Web
@@ -15,8 +31,8 @@
       </div>
     </header>
 
-    <!-- Main Content -->
-    <main class="main-content">
+    <!-- ============ 部署 Tab ============ -->
+    <main v-if="activeTab === 'deploy'" class="main-content">
       <!-- Step 1: Project Path -->
       <section class="step-section">
         <div class="step-header">
@@ -198,11 +214,154 @@
       </section>
     </main>
 
+    <!-- ============ 代码检测 Tab ============ -->
+    <main v-if="activeTab === 'fix'" class="main-content">
+      <!-- Step 1: 输入路径 -->
+      <section class="step-section">
+        <div class="step-header">
+          <span class="step-num fix-num">1</span>
+          <span class="step-title">输入项目路径</span>
+        </div>
+        <div class="step-body">
+          <el-input
+            v-model="fixProjectPath"
+            placeholder="/path/to/your/project"
+            size="large"
+            clearable
+            @keyup.enter="analyzeCode"
+          >
+            <template #prefix>
+              <el-icon><Folder /></el-icon>
+            </template>
+            <template #append>
+              <el-button
+                type="warning"
+                :loading="analyzing"
+                @click="analyzeCode"
+              >
+                <el-icon v-if="!analyzing"><Search /></el-icon>
+                检测错误
+              </el-button>
+            </template>
+          </el-input>
+        </div>
+      </section>
+
+      <!-- Step 2: 错误列表 -->
+      <section v-if="analysisResult" class="step-section fade-in">
+        <div class="step-header">
+          <span class="step-num fix-num">2</span>
+          <span class="step-title">检测结果</span>
+          <div class="result-summary" v-if="analysisResult.total > 0">
+            <el-tag type="danger" effect="dark" size="small">
+              {{ analysisResult.error_count }} 个错误
+            </el-tag>
+            <el-tag type="warning" effect="dark" size="small">
+              {{ analysisResult.warning_count }} 个警告
+            </el-tag>
+          </div>
+          <div class="result-summary" v-else>
+            <el-tag type="success" effect="dark" size="small">✓ 未发现问题</el-tag>
+          </div>
+        </div>
+        <div class="step-body">
+          <div v-if="analysisResult.total === 0" class="no-errors">
+            <span class="no-errors-icon">🎉</span>
+            <p>恭喜！未检测到代码错误</p>
+          </div>
+          <div v-else class="error-list">
+            <div
+              v-for="(err, idx) in analysisResult.errors"
+              :key="idx"
+              class="error-item"
+              :class="[err.severity, { selected: selectedErrors.includes(idx) }]"
+              @click="toggleError(idx)"
+            >
+              <div class="error-left">
+                <span class="error-severity" :class="err.severity">
+                  {{ err.severity === 'error' ? '✕' : '⚠' }}
+                </span>
+                <span class="error-type-badge">{{ errorTypeLabel(err.error_type) }}</span>
+              </div>
+              <div class="error-center">
+                <span class="error-file">{{ err.file }}</span>
+                <span class="error-line" v-if="err.line > 0">:{{ err.line }}</span>
+                <p class="error-msg">{{ err.error }}</p>
+              </div>
+              <div class="error-right">
+                <el-checkbox
+                  :model-value="selectedErrors.includes(idx)"
+                  @click.stop="toggleError(idx)"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 3: 修复操作 -->
+      <section v-if="selectedErrors.length > 0" class="step-section fade-in">
+        <div class="step-header">
+          <span class="step-num fix-num">3</span>
+          <span class="step-title">自动修复</span>
+          <span class="selected-count">已选 {{ selectedErrors.length }} 项</span>
+        </div>
+        <div class="step-body">
+          <div class="fix-actions">
+            <el-button
+              type="warning"
+              size="large"
+              :loading="repairing"
+              @click="repairErrors"
+            >
+              <el-icon v-if="!repairing"><Magic /></el-icon>
+              AI 自动修复
+            </el-button>
+            <el-button size="large" @click="selectAllErrors">
+              全选
+            </el-button>
+            <el-button size="large" @click="selectedErrors = []">
+              清空
+            </el-button>
+          </div>
+
+          <!-- 修复结果 Diff 展示 -->
+          <div v-if="repairResults.length > 0" class="repair-results fade-in">
+            <h4>📝 修复对比</h4>
+            <div v-for="(result, ridx) in repairResults" :key="ridx" class="repair-item">
+              <div class="repair-file-header">
+                <span class="repair-filename">{{ result.file }}</span>
+                <el-button
+                  type="success"
+                  size="small"
+                  :disabled="result.applied"
+                  @click="applyFix(result)"
+                >
+                  {{ result.applied ? '✓ 已应用' : '应用修复' }}
+                </el-button>
+              </div>
+              <div class="diff-container">
+                <div class="diff-side">
+                  <div class="diff-label">原始代码</div>
+                  <pre class="diff-code original"><code>{{ result.original }}</code></pre>
+                </div>
+                <div class="diff-divider"></div>
+                <div class="diff-side">
+                  <div class="diff-label">修复后</div>
+                  <pre class="diff-code fixed"><code>{{ result.fixed }}</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
     <!-- Footer -->
     <footer class="app-footer">
       <span>AI Auto Deploy</span>
       <span class="separator">·</span>
-      <span>智能识别 · 一键部署 · 多平台支持</span>
+      <span>智能识别 · 一键部署 · 代码检测 · 自动修复</span>
     </footer>
   </div>
 </template>
@@ -214,6 +373,8 @@ export default {
   name: 'App',
   data() {
     return {
+      activeTab: 'deploy',
+      // Deploy tab
       projectPath: '',
       projectInfo: null,
       detecting: false,
@@ -232,12 +393,20 @@ export default {
         { value: 'cloudflare', label: 'Cloudflare Pages', icon: '☁️' },
         { value: 'docker', label: 'Docker', icon: '🐳' },
       ],
+      // Fix tab
+      fixProjectPath: '',
+      analyzing: false,
+      analysisResult: null,
+      selectedErrors: [],
+      repairing: false,
+      repairResults: [],
     }
   },
   mounted() {
     this.loadServers()
   },
   methods: {
+    // ===== Deploy =====
     async detectProject() {
       if (!this.projectPath.trim()) {
         this.$message.warning('请输入项目路径')
@@ -325,6 +494,88 @@ export default {
       const map = { python: 'success', nodejs: 'warning', static: 'info' }
       return map[type] || ''
     },
+
+    // ===== Code Fix =====
+    async analyzeCode() {
+      if (!this.fixProjectPath.trim()) {
+        this.$message.warning('请输入项目路径')
+        return
+      }
+      this.analyzing = true
+      this.analysisResult = null
+      this.selectedErrors = []
+      this.repairResults = []
+      try {
+        const res = await axios.post('/api/fix/analyze', { path: this.fixProjectPath })
+        this.analysisResult = res.data
+        if (res.data.total > 0) {
+          this.$message.warning(`发现 ${res.data.total} 个问题`)
+        } else {
+          this.$message.success('未检测到问题')
+        }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '分析失败')
+      } finally {
+        this.analyzing = false
+      }
+    },
+
+    toggleError(idx) {
+      const pos = this.selectedErrors.indexOf(idx)
+      if (pos === -1) {
+        this.selectedErrors.push(idx)
+      } else {
+        this.selectedErrors.splice(pos, 1)
+      }
+    },
+
+    selectAllErrors() {
+      if (!this.analysisResult) return
+      this.selectedErrors = this.analysisResult.errors.map((_, i) => i)
+    },
+
+    async repairErrors() {
+      if (this.selectedErrors.length === 0) return
+      this.repairing = true
+      this.repairResults = []
+      try {
+        const errors = this.selectedErrors.map(idx => this.analysisResult.errors[idx])
+        const res = await axios.post('/api/fix/repair', {
+          path: this.fixProjectPath,
+          errors: errors,
+        })
+        this.repairResults = res.data.results.map(r => ({ ...r, applied: false }))
+        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件`)
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '修复失败')
+      } finally {
+        this.repairing = false
+      }
+    },
+
+    async applyFix(result) {
+      try {
+        await axios.post('/api/fix/apply', {
+          path: this.fixProjectPath,
+          fixes: [{ file: result.file, fixed: result.fixed }],
+        })
+        result.applied = true
+        this.$message.success(`${result.file} 修复已应用`)
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '应用修复失败')
+      }
+    },
+
+    errorTypeLabel(type) {
+      const map = {
+        syntax: '语法',
+        import: '依赖',
+        type: '类型',
+        config: '配置',
+        bracket: '括号',
+      }
+      return map[type] || type
+    },
   },
 }
 </script>
@@ -354,6 +605,12 @@ export default {
   gap: 12px;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .logo {
   font-size: 28px;
 }
@@ -371,6 +628,39 @@ export default {
   background: var(--bg-tertiary);
   padding: 2px 8px;
   border-radius: 10px;
+}
+
+/* Tab Bar */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.tab-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 
 /* Main */
@@ -397,6 +687,7 @@ export default {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-tertiary);
+  flex-wrap: wrap;
 }
 
 .step-num {
@@ -412,6 +703,10 @@ export default {
   border-radius: 50%;
 }
 
+.step-num.fix-num {
+  background: var(--accent-orange);
+}
+
 .step-title {
   font-size: 15px;
   font-weight: 600;
@@ -420,6 +715,18 @@ export default {
 
 .step-body {
   padding: 20px;
+}
+
+.result-summary {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.selected-count {
+  font-size: 13px;
+  color: var(--accent-orange);
+  margin-left: auto;
 }
 
 /* Info Grid */
@@ -572,6 +879,209 @@ export default {
   color: var(--text-primary);
 }
 
+/* ===== Error List ===== */
+.no-errors {
+  text-align: center;
+  padding: 32px 0;
+}
+
+.no-errors-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.no-errors p {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.error-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.error-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.error-item:hover {
+  border-color: var(--text-secondary);
+}
+
+.error-item.selected {
+  border-color: var(--accent-orange);
+  background: rgba(210, 153, 34, 0.05);
+}
+
+.error-item.error {
+  border-left: 3px solid #f85149;
+}
+
+.error-item.warning {
+  border-left: 3px solid #d29922;
+}
+
+.error-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.error-severity {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+}
+
+.error-severity.error {
+  color: #f85149;
+}
+
+.error-severity.warning {
+  color: #d29922;
+}
+
+.error-type-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.error-center {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-file {
+  font-size: 13px;
+  color: var(--accent-blue);
+  font-family: monospace;
+}
+
+.error-line {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+
+.error-msg {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.error-right {
+  flex-shrink: 0;
+}
+
+/* Fix Actions */
+.fix-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+/* Repair Results / Diff */
+.repair-results {
+  margin-top: 12px;
+}
+
+.repair-results h4 {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.repair-item {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.repair-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.repair-filename {
+  font-size: 13px;
+  color: var(--accent-blue);
+  font-family: monospace;
+}
+
+.diff-container {
+  display: flex;
+  background: var(--terminal-bg);
+  overflow: hidden;
+}
+
+.diff-side {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  max-height: 400px;
+}
+
+.diff-label {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.diff-side:first-child .diff-label {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.08);
+}
+
+.diff-side:last-child .diff-label {
+  color: #3fb950;
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.diff-code {
+  margin: 0;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  white-space: pre;
+  color: var(--text-primary);
+}
+
+.diff-divider {
+  width: 1px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
 /* Footer */
 .app-footer {
   padding: 20px 0;
@@ -605,6 +1115,18 @@ export default {
   }
   .config-row {
     flex-direction: column;
+  }
+  .diff-container {
+    flex-direction: column;
+  }
+  .diff-divider {
+    width: auto;
+    height: 1px;
+  }
+  .header-right {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
   }
 }
 </style>
