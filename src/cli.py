@@ -496,6 +496,11 @@ def generate_dockerfile(project_info: dict) -> str:
     fw = project_info["framework"]
     
     if ptype == "python":
+        expose_line = "EXPOSE 8000" if fw == "fastapi" else "EXPOSE 5000"
+        if fw == "fastapi":
+            cmd_line = 'CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]'
+        else:
+            cmd_line = 'CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000"]'
         return f'''FROM python:3.11-slim
 
 WORKDIR /app
@@ -503,9 +508,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 COPY . .
 
-{"EXPOSE 8000" if fw == "fastapi" else "EXPOSE 5000"}
+{expose_line}
 
-{"CMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]" if fw == "fastapi" else "CMD [\"gunicorn\", \"app:app\", \"--bind\", \"0.0.0.0:5000\"]"}
+{cmd_line}
 '''
     
     elif ptype == "nodejs":
