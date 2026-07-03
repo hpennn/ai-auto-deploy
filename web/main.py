@@ -8,6 +8,8 @@ import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 # Add project root to path so we can import src
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -52,3 +54,20 @@ async def root():
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# 静态文件托管（前端）
+frontend_dist = os.path.join(project_root, "frontend", "dist")
+if os.path.isdir(frontend_dist):
+    # 挂载静态资源
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
+    
+    # SPA fallback - 所有非 API 路由返回 index.html
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # 尝试返回请求的文件
+        file_path = os.path.join(frontend_dist, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        # 否则返回 index.html（SPA 路由）
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
