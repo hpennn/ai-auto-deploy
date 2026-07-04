@@ -4,7 +4,7 @@
     <header class="app-header">
       <div class="header-left" @click="logoClickCount++">
         <span class="logo">🚀</span>
-        <h1>AI Auto Deploy</h1>
+        <h1>AI项目自动部署</h1>
         <span class="version">v1.2</span>
       </div>
       <div class="header-right">
@@ -23,6 +23,11 @@
           </button>
         </div>
         <div class="header-actions">
+          <template v-if="isLoggedIn">
+            <el-tag type="info" effect="plain" round size="small">{{ loggedInUsername }}</el-tag>
+            <el-button text size="small" @click="isLoggedIn = false; loggedInUsername = ''">退出</el-button>
+          </template>
+          <el-button v-else text size="small" type="primary" @click="loginMode = 'login'; loginDialogVisible = true">登录</el-button>
           <el-tag v-if="paymentStatus.paid" type="success" effect="plain" round>
             👑 {{ planLabel }}
           </el-tag>
@@ -630,6 +635,42 @@
       </template>
     </el-dialog>
 
+    <!-- ============ 登录/注册弹窗 ============ -->
+    <el-dialog v-model="loginDialogVisible" :title="loginMode === 'login' ? '登录' : '注册'" width="420px" :close-on-click-modal="false">
+      <div class="login-content">
+        <el-form :model="loginForm" label-width="0" size="large">
+          <el-form-item>
+            <el-input v-model="loginForm.username" placeholder="用户名" clearable>
+              <template #prefix><el-icon><User /></el-icon></template>
+            </el-input>
+          </el-form-item>
+          <el-form-item>
+            <el-input v-model="loginForm.password" type="password" placeholder="密码" show-password>
+              <template #prefix><el-icon><Lock /></el-icon></template>
+            </el-input>
+          </el-form-item>
+          <el-form-item v-if="loginMode === 'register'">
+            <el-input v-model="loginForm.confirmPassword" type="password" placeholder="确认密码" show-password>
+              <template #prefix><el-icon><Lock /></el-icon></template>
+            </el-input>
+          </el-form-item>
+        </el-form>
+        <div class="login-actions">
+          <el-button type="primary" :loading="loginLoading" @click="handleLogin" style="width: 100%;">
+            {{ loginMode === 'login' ? '登录' : '注册' }}
+          </el-button>
+        </div>
+        <div class="login-switch">
+          <span v-if="loginMode === 'login'">
+            还没有账号？<el-link type="primary" @click="loginMode = 'register'">立即注册</el-link>
+          </span>
+          <span v-else>
+            已有账号？<el-link type="primary" @click="loginMode = 'login'">去登录</el-link>
+          </span>
+        </div>
+      </div>
+    </el-dialog>
+
     <!-- Admin Login Dialog -->
     <el-dialog v-model="adminLoginVisible" title="管理员验证" width="400px" :close-on-click-modal="false">
       <div class="admin-login-content">
@@ -700,6 +741,13 @@ export default {
         '远程部署到服务器',
         '优先技术支持',
       ],
+      // Login/Register
+      loginDialogVisible: false,
+      loginMode: 'login', // 'login' or 'register'
+      loginLoading: false,
+      loginForm: { username: '', password: '', confirmPassword: '' },
+      isLoggedIn: false,
+      loggedInUsername: '',
       // Deploy tab
       projectPath: '',
       projectInfo: null,
@@ -965,7 +1013,55 @@ export default {
       } catch { /* ignore */ }
     },
     showPaymentDialog() {
+      if (!this.isLoggedIn) {
+        // 未登录，先弹出登录/注册弹窗
+        this.loginMode = 'login'
+        this.loginDialogVisible = true
+        return
+      }
       this.paymentDialogVisible = true
+    },
+    async handleLogin() {
+      if (!this.loginForm.username.trim()) {
+        this.$message.warning('请输入用户名')
+        return
+      }
+      if (!this.loginForm.password) {
+        this.$message.warning('请输入密码')
+        return
+      }
+      if (this.loginMode === 'register' && this.loginForm.password !== this.loginForm.confirmPassword) {
+        this.$message.warning('两次密码输入不一致')
+        return
+      }
+
+      this.loginLoading = true
+      try {
+        const endpoint = this.loginMode === 'login' ? '/api/auth/login' : '/api/auth/register'
+        const res = await axios.post(endpoint, {
+          username: this.loginForm.username,
+          password: this.loginForm.password,
+        })
+        if (res.data.success) {
+          this.userId = res.data.user_id
+          this.isLoggedIn = true
+          this.loggedInUsername = this.loginForm.username
+          this.$message.success(this.loginMode === 'login' ? '登录成功' : '注册成功')
+          this.loginDialogVisible = false
+          // 注册后清空表单
+          this.loginForm = { username: '', password: '', confirmPassword: '' }
+          // 如果是从开通会员进来的，登录后自动打开支付弹窗
+          if (this.loginMode === 'register') {
+            setTimeout(() => { this.paymentDialogVisible = true }, 300)
+          }
+        } else {
+          this.$message.error(res.data.message || '操作失败')
+        }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '网络错误')
+      } finally {
+        this.loginLoading = false
+      }
     },
     async handlePay() {
       this.payLoading = true
@@ -1425,6 +1521,11 @@ export default {
 .empty-state span { font-size: 48px; display: block; margin-bottom: 12px; }
 
 .admin-login-content { padding: 8px 0; }
+
+/* Login Dialog */
+.login-content { padding: 8px 0; }
+.login-actions { margin-top: 16px; }
+.login-switch { text-align: center; margin-top: 16px; font-size: 14px; color: var(--text-secondary); }
 
 /* Footer */
 .app-footer { padding: 20px 0; text-align: center; font-size: 12px; color: var(--text-secondary); border-top: 1px solid var(--border-color); }

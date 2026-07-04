@@ -66,6 +66,19 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # Create user_credentials table for login/register
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS user_credentials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
+    """)
+    conn.commit()
     conn.close()
 
 
@@ -90,6 +103,40 @@ def upsert_user(user_id: str, paid_type: str, paid_at: str = None, expires_at: s
     )
     conn.commit()
     conn.close()
+
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    """通过用户名获取用户凭证"""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM user_credentials WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_user_with_auth(username: str, password_hash: str) -> str:
+    """创建用户并设置登录凭证，返回 user_id"""
+    conn = get_conn()
+    from datetime import datetime
+    now = datetime.now().isoformat()
+    
+    # 生成 user_id
+    user_id = f"user_{int(time.time() * 1000)}"
+    
+    # 创建用户记录
+    conn.execute(
+        "INSERT INTO users (user_id, paid_type, created_at) VALUES (?, 'free', ?)",
+        (user_id, now),
+    )
+    
+    # 创建登录凭证
+    conn.execute(
+        "INSERT INTO user_credentials (username, password, user_id, created_at) VALUES (?, ?, ?, ?)",
+        (username, password_hash, user_id, now),
+    )
+    
+    conn.commit()
+    conn.close()
+    return user_id
 
 
 def register_user(user_id: str) -> dict:
