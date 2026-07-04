@@ -46,11 +46,6 @@ app.include_router(payment_router, prefix="/api/payment", tags=["payment"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 
 
-@app.get("/")
-async def root():
-    return {"message": "AI Auto Deploy API", "version": "1.2.0"}
-
-
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
@@ -62,7 +57,7 @@ if os.path.isdir(frontend_dist):
     # 挂载静态资源
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
     
-    # SPA fallback - 所有非 API 路由返回 index.html
+    # SPA fallback - 所有非 API 路由返回 index.html（包括根路径）
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         # 尝试返回请求的文件
@@ -71,3 +66,8 @@ if os.path.isdir(frontend_dist):
             return FileResponse(file_path)
         # 否则返回 index.html（SPA 路由）
         return FileResponse(os.path.join(frontend_dist, "index.html"))
+else:
+    # 前端未构建时，返回 API 信息
+    @app.get("/")
+    async def root():
+        return {"message": "AI Auto Deploy API", "version": "1.2.0"}
