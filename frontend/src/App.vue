@@ -40,6 +40,47 @@
 
     <!-- ============ 部署 Tab ============ -->
     <main v-if="activeTab === 'deploy'" class="main-content">
+      <!-- 使用说明 -->
+      <section class="step-section usage-guide">
+        <div class="guide-header" @click="guideExpanded = !guideExpanded">
+          <span class="guide-icon">📖</span>
+          <span class="guide-title">使用说明</span>
+          <el-icon class="guide-arrow" :class="{ expanded: guideExpanded }"><ArrowDown /></el-icon>
+        </div>
+        <div v-show="guideExpanded" class="guide-body">
+          <div class="guide-steps">
+            <div class="guide-step">
+              <span class="guide-step-num">1</span>
+              <div class="guide-step-content">
+                <h4>输入项目路径</h4>
+                <p>填写服务器上项目的绝对路径，或从下拉列表选择已有项目，点击「检测」按钮识别项目类型</p>
+              </div>
+            </div>
+            <div class="guide-step">
+              <span class="guide-step-num">2</span>
+              <div class="guide-step-content">
+                <h4>确认项目信息</h4>
+                <p>系统自动识别项目类型（Python/Node.js/Go/PHP/Java 等）、框架和包管理器</p>
+              </div>
+            </div>
+            <div class="guide-step">
+              <span class="guide-step-num">3</span>
+              <div class="guide-step-content">
+                <h4>选择部署方式</h4>
+                <p>支持部署到服务器、Docker 容器、Cloudflare Pages 等多种方式</p>
+              </div>
+            </div>
+            <div class="guide-step">
+              <span class="guide-step-num">4</span>
+              <div class="guide-step-content">
+                <h4>生成并执行</h4>
+                <p>一键生成部署脚本，支持复制、下载或直接远程部署到目标服务器</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Step 1 -->
       <section class="step-section">
         <div class="step-header">
@@ -47,6 +88,16 @@
           <span class="step-title">输入项目路径</span>
         </div>
         <div class="step-body">
+          <!-- 快速选择 -->
+          <div class="path-select-row">
+            <span class="path-select-label">快速选择：</span>
+            <el-select v-model="projectPath" placeholder="选择已有项目" filterable clearable size="large" style="flex:1" @change="onPathSelect">
+              <el-option v-for="p in availablePaths" :key="p.path" :label="p.path" :value="p.path">
+                <span>📁 {{ p.name }}</span>
+                <span style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;">{{ p.path }}</span>
+              </el-option>
+            </el-select>
+          </div>
           <el-input v-model="projectPath" placeholder="/path/to/your/project" size="large" clearable @keyup.enter="detectProject">
             <template #prefix><el-icon><Folder /></el-icon></template>
             <template #append>
@@ -749,6 +800,8 @@ export default {
       isLoggedIn: false,
       loggedInUsername: '',
       // Deploy tab
+      availablePaths: [],
+      guideExpanded: true,
       projectPath: '',
       projectInfo: null,
       detecting: false,
@@ -854,6 +907,7 @@ export default {
       this.adminLoginVisible = true
     }
 
+    this.loadAvailablePaths()
     this.loadServers()
     this.checkPaymentStatus()
     this.checkAdminStatus()
@@ -1109,6 +1163,17 @@ export default {
       return false
     },
     // ===== Deploy =====
+    async loadAvailablePaths() {
+      try {
+        const res = await axios.get('/api/deploy/list-paths')
+        this.availablePaths = res.data || []
+      } catch (e) {
+        console.log('Failed to load paths', e)
+      }
+    },
+    onPathSelect(val) {
+      if (val) this.detectProject()
+    },
     async detectProject() {
       if (!this.projectPath.trim()) { this.$message.warning('请输入项目路径'); return }
       this.detecting = true
@@ -1365,6 +1430,26 @@ export default {
 .step-num.admin-num { background: var(--accent-orange); color: #fff; font-size: 16px; width: auto; border-radius: 6px; padding: 0 6px; }
 .step-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .step-body { padding: 20px; }
+
+/* Usage Guide */
+.usage-guide { margin-bottom: 8px; }
+.guide-header { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 16px 20px; user-select: none; }
+.guide-icon { font-size: 18px; }
+.guide-title { font-size: 15px; font-weight: 600; color: var(--text-primary); flex: 1; }
+.guide-arrow { transition: transform 0.3s; color: var(--text-secondary); }
+.guide-arrow.expanded { transform: rotate(180deg); }
+.guide-body { padding: 0 20px 16px 20px; }
+.guide-steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.guide-step { display: flex; gap: 12px; padding: 12px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color); }
+.guide-step-num { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-blue); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+.guide-step-content { flex: 1; }
+.guide-step-content h4 { font-size: 14px; color: var(--text-primary); margin: 0 0 4px 0; }
+.guide-step-content p { font-size: 12px; color: var(--text-secondary); margin: 0; line-height: 1.5; }
+
+/* Path Select Row */
+.path-select-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.path-select-label { font-size: 13px; color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
+
 .result-summary { display: flex; gap: 8px; margin-left: auto; }
 .selected-count { font-size: 13px; color: var(--accent-purple); margin-left: auto; }
 

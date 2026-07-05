@@ -39,6 +39,40 @@ class GenerateResponse(BaseModel):
 
 # ============ Routes ============
 
+@router.get("/list-paths")
+async def list_project_paths():
+    """Scan common directories and return subdirectory paths"""
+    import stat
+    
+    scan_dirs = ["/www/wwwroot/", "/root/", "/home/"]
+    skip_names = {
+        "node_modules", "venv", ".venv", "env", "__pycache__",
+        ".git", ".svn", ".hg", "cache", "tmp", "temp", ".cache",
+        ".local", ".npm", ".nvm", ".pyenv", ".rbenv", ".rustup",
+        ".cargo", ".config", ".ssh", ".aws", ".docker",
+    }
+    results = []
+
+    for base in scan_dirs:
+        if not os.path.isdir(base):
+            continue
+        try:
+            entries = os.listdir(base)
+        except PermissionError:
+            continue
+        for name in sorted(entries):
+            if name.startswith(".") or name in skip_names:
+                continue
+            full = os.path.join(base, name)
+            try:
+                if os.path.isdir(full):
+                    results.append({"path": full, "name": name})
+            except (PermissionError, OSError):
+                continue
+
+    return results
+
+
 @router.post("/detect")
 async def detect_project(req: DetectRequest):
     """Detect project type from a given path"""
