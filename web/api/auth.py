@@ -7,7 +7,7 @@ import hashlib
 import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from web.database import get_db, get_user_by_username, create_user_with_auth
+from web.database import get_user_by_username, create_user_with_auth
 
 router = APIRouter()
 
