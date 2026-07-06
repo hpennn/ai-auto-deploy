@@ -25,7 +25,7 @@
         <div class="header-actions">
           <template v-if="isLoggedIn">
             <el-tag type="info" effect="plain" round size="small">{{ loggedInUsername }}</el-tag>
-            <el-button text size="small" @click="isLoggedIn = false; loggedInUsername = ''">退出</el-button>
+            <el-button text size="small" @click="handleLogout">退出</el-button>
           </template>
           <el-button v-else text size="small" type="primary" @click="loginMode = 'login'; loginDialogVisible = true">登录</el-button>
           <el-tag v-if="paymentStatus.paid" type="success" effect="plain" round>
@@ -824,7 +824,7 @@ export default {
     return {
       activeTab: 'deploy',
       // User & Payment
-      userId: 'user_' + Math.random().toString(36).slice(2, 10),
+      userId: localStorage.getItem('user_id') || 'user_' + Math.random().toString(36).slice(2, 10),
       paymentStatus: { paid: false, paid_type: 'free' },
       paymentDialogVisible: false,
       payLoading: false,
@@ -845,8 +845,8 @@ export default {
       loginMode: 'login', // 'login' or 'register'
       loginLoading: false,
       loginForm: { username: '', password: '', confirmPassword: '' },
-      isLoggedIn: false,
-      loggedInUsername: '',
+      isLoggedIn: !!localStorage.getItem('user_id'),
+      loggedInUsername: localStorage.getItem('logged_in_username') || '',
       // SSH Connection
       sshForm: { host: '', port: 22, username: 'root', password: '' },
       sshConnecting: false,
@@ -1155,6 +1155,8 @@ export default {
           this.userId = res.data.user_id
           this.isLoggedIn = true
           this.loggedInUsername = this.loginForm.username
+          localStorage.setItem('user_id', res.data.user_id)
+          localStorage.setItem('logged_in_username', this.loginForm.username)
           this.$message.success(this.loginMode === 'login' ? '登录成功' : '注册成功')
           this.loginDialogVisible = false
           // 注册后清空表单
@@ -1171,6 +1173,15 @@ export default {
       } finally {
         this.loginLoading = false
       }
+    },
+    handleLogout() {
+      this.isLoggedIn = false
+      this.loggedInUsername = ''
+      this.userId = 'user_' + Math.random().toString(36).slice(2, 10)
+      this.isAdmin = false
+      localStorage.removeItem('user_id')
+      localStorage.removeItem('logged_in_username')
+      this.$message.success('已退出登录')
     },
     async handlePay() {
       this.payLoading = true
