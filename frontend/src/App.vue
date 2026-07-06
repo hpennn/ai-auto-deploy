@@ -18,20 +18,65 @@
           <button class="tab-btn" :class="{ active: activeTab === 'fix' }" @click="activeTab = 'fix'">
             🔧 代码检测
           </button>
+          <button class="tab-btn" :class="{ active: activeTab === 'editcode' }" @click="activeTab = 'editcode'">
+            🛠 代码修改
+          </button>
           <button v-if="isAdmin" class="tab-btn admin-tab" :class="{ active: activeTab === 'admin' }" @click="activeTab = 'admin'">
             🛡️ 管理后台
           </button>
         </div>
         <div class="header-actions">
           <template v-if="isLoggedIn">
-            <el-tag type="info" effect="plain" round size="small">{{ loggedInUsername }}</el-tag>
-            <el-button text size="small" @click="handleLogout">退出</el-button>
+            <el-popover placement="bottom-end" :width="320" trigger="click" @show="loadUserProfile">
+              <template #reference>
+                <div class="user-tag-wrapper">
+                  <el-tag type="info" effect="plain" round size="small" class="user-tag-clickable">
+                    👤 {{ loggedInUsername }}
+                  </el-tag>
+                  <el-tag v-if="paymentStatus.paid" type="success" effect="plain" round size="small" class="vip-badge-small">
+                    👑
+                  </el-tag>
+                </div>
+              </template>
+              <div class="profile-popover">
+                <div class="profile-header">
+                  <div class="profile-avatar">{{ loggedInUsername ? loggedInUsername[0].toUpperCase() : '?' }}</div>
+                  <div class="profile-name">{{ userProfile.username || loggedInUsername }}</div>
+                </div>
+                <div class="profile-info">
+                  <div class="profile-row">
+                    <span class="profile-label">订阅状态</span>
+                    <el-tag :type="profilePaidTypeTag" size="small" effect="dark">{{ profilePaidLabel }}</el-tag>
+                  </div>
+                  <div class="profile-row" v-if="userProfile.paid_type && userProfile.paid_type !== 'free'">
+                    <span class="profile-label">剩余时长</span>
+                    <span class="profile-value" :class="{ 'text-expired': profileDaysLeft <= 0 }">{{ profileRemainingText }}</span>
+                  </div>
+                  <div class="profile-row" v-if="userProfile.expires_at">
+                    <span class="profile-label">到期时间</span>
+                    <span class="profile-value">{{ formatFullTime(userProfile.expires_at) }}</span>
+                  </div>
+                  <div class="profile-row">
+                    <span class="profile-label">注册时间</span>
+                    <span class="profile-value">{{ formatFullTime(userProfile.created_at) }}</span>
+                  </div>
+                  <div class="profile-row">
+                    <span class="profile-label">用户ID</span>
+                    <span class="profile-value mono">{{ userId }}</span>
+                  </div>
+                </div>
+                <div class="profile-actions">
+                  <el-button v-if="!paymentStatus.paid" type="primary" size="small" @click="showPaymentDialog" style="width: 100%;">开通会员</el-button>
+                  <el-button type="danger" size="small" plain @click="handleLogout" style="width: 100%;">退出登录</el-button>
+                </div>
+              </div>
+            </el-popover>
           </template>
           <el-button v-else text size="small" type="primary" @click="loginMode = 'login'; loginDialogVisible = true">登录</el-button>
-          <el-tag v-if="paymentStatus.paid" type="success" effect="plain" round>
+          <el-tag v-if="paymentStatus.paid && !isLoggedIn" type="success" effect="plain" round>
             👑 {{ planLabel }}
           </el-tag>
-          <el-tag v-else type="info" effect="plain" round class="vip-tag" @click="showPaymentDialog">
+          <el-tag v-if="!isLoggedIn" type="info" effect="plain" round class="vip-tag" @click="showPaymentDialog">
             开通会员
           </el-tag>
         </div>
@@ -444,6 +489,91 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ============ 代码修改 Tab ============ -->
+    <main v-if="activeTab === 'editcode'" class="main-content">
+      <!-- Tip section -->
+      <section class="step-section">
+        <div class="editcode-tips">
+          <div class="editcode-tips-title">💡 可以修改的内容：</div>
+          <ul class="editcode-tips-list">
+            <li>项目配置文件（如 .env、config.py、settings.py）</li>
+            <li>路由文件（修改 URL 路径、页面逻辑）</li>
+            <li>静态资源文件（HTML/CSS/JS 微调）</li>
+            <li>数据库连接配置</li>
+            <li>API 接口参数</li>
+          </ul>
+          <div class="editcode-tips-warn">⚠️ 修改前请确认了解文件用途，错误修改可能导致项目无法运行</div>
+        </div>
+      </section>
+
+      <!-- Step 1: File Path -->
+      <section class="step-section">
+        <div class="step-header">
+          <span class="step-num edit-num">1</span>
+          <span class="step-title">输入文件路径</span>
+          <el-tag v-if="!sshConnected" type="warning" effect="dark" size="small">需先连接服务器</el-tag>
+        </div>
+        <div class="step-body">
+          <div v-if="!sshConnected" class="ssh-required-notice">
+            <span class="ssh-required-icon">🔗</span>
+            <p>请先在「部署」Tab 中连接远程服务器</p>
+            <el-button type="primary" size="small" @click="activeTab = 'deploy'">前往连接</el-button>
+          </div>
+          <div v-else class="editcode-form">
+            <el-input v-model="editFilePath" placeholder="输入远程文件绝对路径，如 /www/wwwroot/myproject/.env" size="large" clearable @keyup.enter="readRemoteFile">
+              <template #prefix><el-icon><Document /></el-icon></template>
+              <template #append>
+                <el-button type="primary" :loading="editFileLoading" @click="readRemoteFile">
+                  <el-icon v-if="!editFileLoading"><FolderOpened /></el-icon>
+                  读取文件
+                </el-button>
+              </template>
+            </el-input>
+            <div class="editcode-quick-paths" v-if="editFilePathHistory.length > 0">
+              <span class="quick-paths-label">最近打开：</span>
+              <el-tag v-for="(p, i) in editFilePathHistory" :key="i" size="small" effect="plain" class="quick-path-tag" @click="editFilePath = p; readRemoteFile()">
+                {{ p.split('/').pop() }}
+              </el-tag>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 2: Editor -->
+      <section v-if="editFileContent !== null" class="step-section fade-in">
+        <div class="step-header">
+          <span class="step-num edit-num">2</span>
+          <span class="step-title">编辑文件</span>
+          <span class="editcode-file-info">
+            <el-tag size="small" type="info">{{ editFilePath.split('/').pop() }}</el-tag>
+            <span v-if="editFileInfo.size" class="dim">{{ formatFileSize(editFileInfo.size) }}</span>
+          </span>
+        </div>
+        <div class="step-body">
+          <div class="editcode-editor-wrapper">
+            <el-input
+              v-model="editFileContent"
+              type="textarea"
+              :autosize="{ minRows: 10, maxRows: 40 }"
+              class="editcode-editor"
+              spellcheck="false"
+            />
+          </div>
+          <div class="editcode-actions">
+            <el-button type="primary" size="large" :loading="editFileSaving" @click="writeRemoteFile">
+              💾 保存文件
+            </el-button>
+            <el-button size="large" @click="readRemoteFile" :loading="editFileLoading">
+              🔄 重新加载
+            </el-button>
+            <el-button size="large" @click="editFileContent = null; editFileInfo = {}">
+              ✕ 关闭
+            </el-button>
           </div>
         </div>
       </section>
@@ -909,6 +1039,16 @@ export default {
       selectedErrors: [],
       repairing: false,
       repairResults: [],
+      // User Profile
+      userProfile: {},
+      userProfileLoaded: false,
+      // Edit Code tab
+      editFilePath: '',
+      editFileContent: null,
+      editFileInfo: {},
+      editFileLoading: false,
+      editFileSaving: false,
+      editFilePathHistory: [],
       // Admin
       isAdmin: false,
       adminSubTab: 'dashboard',
@@ -945,6 +1085,36 @@ export default {
       const q = this.userSearchQuery.toLowerCase()
       return this.adminUsers.filter(u => u.user_id.toLowerCase().includes(q))
     },
+    profilePaidLabel() {
+      const map = {
+        free: '未开通',
+        monthly: '月度会员',
+        yearly: '年度会员',
+        permanent: '永久会员',
+      }
+      return map[this.userProfile.paid_type] || '未开通'
+    },
+    profilePaidTypeTag() {
+      const map = { free: 'info', monthly: '', yearly: 'warning', permanent: 'danger' }
+      return map[this.userProfile.paid_type] || 'info'
+    },
+    profileDaysLeft() {
+      const pt = this.userProfile.paid_type
+      if (pt === 'permanent') return Infinity
+      if (pt === 'free' || !this.userProfile.expires_at) return 0
+      try {
+        const exp = new Date(this.userProfile.expires_at).getTime()
+        const now = Date.now()
+        return Math.ceil((exp - now) / (1000 * 60 * 60 * 24))
+      } catch { return 0 }
+    },
+    profileRemainingText() {
+      const pt = this.userProfile.paid_type
+      if (pt === 'permanent') return '永久有效'
+      const days = this.profileDaysLeft
+      if (days <= 0) return '已过期'
+      return `剩余 ${days} 天`
+    },
   },
   watch: {
     logoClickCount(val) {
@@ -966,6 +1136,9 @@ export default {
     this.loadServers()
     this.checkPaymentStatus()
     this.checkAdminStatus()
+    if (this.isLoggedIn) {
+      this.loadUserProfile()
+    }
   },
   methods: {
     // ===== Admin =====
@@ -1161,6 +1334,10 @@ export default {
           this.loginDialogVisible = false
           // 注册后清空表单
           this.loginForm = { username: '', password: '', confirmPassword: '' }
+          // 加载用户详细信息
+          this.loadUserProfile()
+          this.checkPaymentStatus()
+          this.checkAdminStatus()
           // 如果是从开通会员进来的，登录后自动打开支付弹窗
           if (this.loginMode === 'register') {
             setTimeout(() => { this.paymentDialogVisible = true }, 300)
@@ -1179,6 +1356,8 @@ export default {
       this.loggedInUsername = ''
       this.userId = 'user_' + Math.random().toString(36).slice(2, 10)
       this.isAdmin = false
+      this.userProfile = {}
+      this.userProfileLoaded = false
       localStorage.removeItem('user_id')
       localStorage.removeItem('logged_in_username')
       this.$message.success('已退出登录')
@@ -1521,6 +1700,85 @@ export default {
     errorTypeLabel(type) {
       return { syntax: '语法', import: '依赖', type: '类型', config: '配置', bracket: '括号' }[type] || type
     },
+
+    // ===== User Profile =====
+    async loadUserProfile() {
+      if (!this.isLoggedIn) return
+      try {
+        const res = await axios.get('/api/auth/profile', {
+          headers: { 'x-user-id': this.userId },
+        })
+        this.userProfile = res.data
+        this.userProfileLoaded = true
+      } catch { /* ignore */ }
+    },
+    formatFullTime(t) {
+      if (!t) return '-'
+      try {
+        return new Date(t).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+      } catch { return t }
+    },
+
+    // ===== Edit Code Tab =====
+    async readRemoteFile() {
+      if (!this.editFilePath.trim()) {
+        this.$message.warning('请输入文件路径')
+        return
+      }
+      if (!this.sshSessionId) {
+        this.$message.warning('请先连接远程服务器')
+        return
+      }
+      this.editFileLoading = true
+      try {
+        const res = await axios.get('/api/deploy/read-file', {
+          params: { session_id: this.sshSessionId, file_path: this.editFilePath.trim() },
+        })
+        this.editFileContent = res.data.content
+        this.editFileInfo = {
+          size: res.data.file_size,
+          mtime: res.data.file_mtime,
+        }
+        // Add to history (deduplicate, max 5)
+        const path = this.editFilePath.trim()
+        this.editFilePathHistory = [path, ...this.editFilePathHistory.filter(p => p !== path)].slice(0, 5)
+        this.$message.success('文件读取成功')
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '读取文件失败')
+      } finally {
+        this.editFileLoading = false
+      }
+    },
+    async writeRemoteFile() {
+      if (!this.editFilePath.trim() || this.editFileContent === null) {
+        this.$message.warning('没有可保存的内容')
+        return
+      }
+      if (!this.sshSessionId) {
+        this.$message.warning('请先连接远程服务器')
+        return
+      }
+      this.editFileSaving = true
+      try {
+        const res = await axios.post('/api/deploy/write-file', {
+          session_id: this.sshSessionId,
+          file_path: this.editFilePath.trim(),
+          content: this.editFileContent,
+        })
+        this.$message.success(res.data.message || '文件保存成功')
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '保存文件失败')
+      } finally {
+        this.editFileSaving = false
+      }
+    },
+    formatFileSize(bytes) {
+      const n = parseInt(bytes)
+      if (isNaN(n)) return ''
+      if (n < 1024) return n + ' B'
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+      return (n / (1024 * 1024)).toFixed(1) + ' MB'
+    },
   },
 }
 </script>
@@ -1765,6 +2023,44 @@ export default {
 /* Animations */
 .fade-in { animation: fadeIn 0.3s ease-in; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ===== User Profile Popover ===== */
+.user-tag-wrapper { display: flex; align-items: center; gap: 4px; cursor: pointer; padding: 4px 8px; border-radius: 20px; transition: background 0.2s; }
+.user-tag-wrapper:hover { background: var(--bg-tertiary); }
+.user-tag-clickable { cursor: pointer; }
+.vip-badge-small { font-size: 10px; }
+.profile-popover { padding: 4px 0; }
+.profile-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-tertiary); border-radius: 8px; margin-bottom: 12px; }
+.profile-avatar { width: 42px; height: 42px; border-radius: 50%; background: var(--accent-blue); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; flex-shrink: 0; }
+.profile-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.profile-info { display: flex; flex-direction: column; gap: 10px; padding: 0 4px; }
+.profile-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.profile-label { color: var(--text-secondary); }
+.profile-value { color: var(--text-primary); font-weight: 500; }
+.profile-value.mono { font-family: monospace; font-size: 11px; color: var(--text-secondary); }
+.text-expired { color: #f85149 !important; }
+.profile-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color); }
+
+/* ===== Edit Code Tab ===== */
+.step-num.edit-num { background: #8b5cf6; color: #fff; }
+.editcode-tips { padding: 20px; }
+.editcode-tips-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+.editcode-tips-list { list-style: none; padding: 0; margin: 0 0 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.editcode-tips-list li { font-size: 13px; color: var(--text-secondary); padding-left: 20px; position: relative; line-height: 1.6; }
+.editcode-tips-list li::before { content: '✓'; position: absolute; left: 0; color: var(--accent-green); font-weight: 700; }
+.editcode-tips-warn { font-size: 13px; color: var(--accent-orange); padding: 10px 14px; background: rgba(210, 153, 34, 0.08); border: 1px solid rgba(210, 153, 34, 0.2); border-radius: 8px; margin-top: 8px; }
+.ssh-required-notice { text-align: center; padding: 24px 0; }
+.ssh-required-icon { font-size: 36px; display: block; margin-bottom: 8px; }
+.ssh-required-notice p { color: var(--text-secondary); font-size: 14px; margin-bottom: 12px; }
+.editcode-form { display: flex; flex-direction: column; gap: 12px; }
+.editcode-quick-paths { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.quick-paths-label { font-size: 12px; color: var(--text-secondary); }
+.quick-path-tag { cursor: pointer; }
+.quick-path-tag:hover { color: var(--accent-blue); border-color: var(--accent-blue); }
+.editcode-file-info { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.editcode-editor-wrapper { margin-bottom: 16px; }
+.editcode-editor :deep(textarea) { font-family: 'JetBrains Mono', 'Fira Code', monospace !important; font-size: 13px !important; line-height: 1.6 !important; background: var(--terminal-bg) !important; color: var(--terminal-green) !important; border: 1px solid var(--border-color) !important; border-radius: 8px !important; padding: 16px !important; }
+.editcode-actions { display: flex; gap: 12px; flex-wrap: wrap; }
 
 /* Responsive */
 @media (max-width: 600px) {

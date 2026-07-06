@@ -8,7 +8,7 @@ import uuid
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import paramiko
@@ -770,3 +770,106 @@ async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] =
         except Exception:
             pass
         yield _send_event("done", "stream_end")
+
+# ============ Remote File Read/Write ============
+
+@router.get("/read-file")
+async def read_remote_file(session_id: str, file_path: str):
+    """Read a file from remote server via SSH session."""
+    if not file_path or not file_path.strip():
+        raise HTTPException(status_code=400, detail="请提供文件路径")
+
+    client = _get_ssh_client(session_id)
+    loop = asyncio.get_event_loop()
+
+    # Security: basic path validation
+    clean_path = file_path.strip().replace(";", "").replace("|", "").replace("&", "")
+
+    def _read():
+        # Check if file exists
+        out, err, code = _exec_ssh_command(client, f'[ -f "{clean_path}" ] && echo "exists" || echo "not_found"')
+        if out.strip() != "exists":
+            raise HTTPException(status_code=404, detail=f"文件不存在: {clean_path}")
+
+        # Check if it's a binary file (skip common binary extensions)
+        binary_exts = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
+                       ".zip", ".tar", ".gz", ".rar", ".7z", ".exe", ".bin",
+                       ".so", ".dll", ".pyc", ".class", ".jar", ".war")
+        if any(clean_path.lower().endswith(ext) for ext in binary_exts):
+            raise HTTPException(status_code=400, detail="不支持读取二进制文件")
+
+        # Read file content (limit to 2MB to avoid memory issues)
+        out, err, code = _exec_ssh_command(
+            client,
+            f'head -c 2097152 "{clean_path}"',
+            timeout=30,
+        )
+        # Check for binary content (null bytes)
+        if "\x00" in out:
+            raise HTTPException(status_code=400, detail="该文件为二进制文件，不支持在线编辑")
+
+        return out
+
+    content = await loop.run_in_executor(None, _read)
+
+    # Get file info
+    def _stat():
+        out, _, _ = _exec_ssh_command(client, f'stat -c "%s|%y" "{clean_path}" 2>/dev/null || stat -f "%z|%Sm" "{clean_path}" 2>/dev/null')
+        return out.strip()
+
+    stat_info = await loop.run_in_executor(None, _stat)
+    file_size = ""
+    file_mtime = ""
+    if "|" in stat_info:
+        parts = stat_info.split("|", 1)
+        file_size = parts[0]
+        file_mtime = parts[1].strip()
+
+    return {
+        "file_path": clean_path,
+        "content": content,
+        "file_size": file_size,
+        "file_mtime": file_mtime,
+    }
+
+
+@router.post("/write-file")
+async def write_remote_file(request: Request):
+    """Write content to a file on remote server via SSH session."""
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    file_path = body.get("file_path", "")
+    content = body.get("content", "")
+
+    if not session_id:
+        raise HTTPException(status_code=400, detail="缺少 session_id")
+    if not file_path or not file_path.strip():
+        raise HTTPException(status_code=400, detail="请提供文件路径")
+
+    client = _get_ssh_client(session_id)
+    loop = asyncio.get_event_loop()
+
+    clean_path = file_path.strip().replace(";", "").replace("|", "").replace("&", "")
+
+    def _write():
+        # Create backup first
+        _exec_ssh_command(client, f'cp "{clean_path}" "{clean_path}.bak" 2>/dev/null')
+
+        # Write content using heredoc to handle special characters
+        import base64
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        cmd = f'echo "{encoded}" | base64 -d > "{clean_path}"'
+        out, err, code = _exec_ssh_command(client, cmd, timeout=30)
+
+        if code != 0:
+            raise HTTPException(status_code=500, detail=f"写入失败: {err}")
+
+        return True
+
+    result = await loop.run_in_executor(None, _write)
+
+    return {
+        "success": True,
+        "file_path": clean_path,
+        "message": f"文件 {clean_path} 已成功保存（已自动备份为 {clean_path}.bak）",
+    }

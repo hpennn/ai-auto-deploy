@@ -76,3 +76,41 @@ async def login(req: LoginRequest):
         "user_id": user["user_id"],
         "message": "登录成功"
     }
+
+from fastapi import Request
+from web.database import get_user
+
+
+@router.get("/profile")
+async def get_profile(request: Request):
+    """获取当前登录用户的详细信息"""
+    user_id = request.headers.get("x-user-id", "")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="缺少用户ID")
+    user = get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 获取用户名（从 user_credentials 表查找）
+    username = ""
+    try:
+        from web.database import get_conn
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT username FROM user_credentials WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        conn.close()
+        if row:
+            username = row["username"]
+    except Exception:
+        pass
+
+    return {
+        "user_id": user.get("user_id"),
+        "username": username,
+        "paid_type": user.get("paid_type", "free"),
+        "paid_at": user.get("paid_at"),
+        "expires_at": user.get("expires_at"),
+        "created_at": user.get("created_at", ""),
+        "is_admin": bool(user.get("is_admin", 0)),
+    }
