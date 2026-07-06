@@ -81,32 +81,80 @@
         </div>
       </section>
 
-      <!-- Step 1 -->
+      <!-- Step 1: Server Connection -->
       <section class="step-section">
         <div class="step-header">
           <span class="step-num">1</span>
-          <span class="step-title">输入项目路径</span>
+          <span class="step-title">连接远程服务器</span>
+          <el-tag v-if="sshConnected" type="success" effect="dark" size="small" class="connected-badge">
+            🟢 已连接 {{ sshHostInfo }}
+          </el-tag>
         </div>
         <div class="step-body">
-          <!-- 快速选择 -->
-          <div class="path-select-row">
-            <span class="path-select-label">快速选择：</span>
-            <el-select v-model="projectPath" placeholder="选择已有项目" filterable clearable size="large" style="flex:1" @change="onPathSelect">
-              <el-option v-for="p in availablePaths" :key="p.path" :label="p.path" :value="p.path">
-                <span>📁 {{ p.name }}</span>
-                <span style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;">{{ p.path }}</span>
-              </el-option>
-            </el-select>
+          <!-- Connection Form -->
+          <div v-if="!sshConnected" class="ssh-form">
+            <div class="ssh-form-row">
+              <div class="ssh-form-item" style="flex:2">
+                <label>IP / 域名</label>
+                <el-input v-model="sshForm.host" placeholder="192.168.1.100 或 example.com" size="large" />
+              </div>
+              <div class="ssh-form-item" style="flex:1; max-width:140px">
+                <label>SSH 端口</label>
+                <el-input v-model.number="sshForm.port" placeholder="22" size="large" />
+              </div>
+            </div>
+            <div class="ssh-form-row">
+              <div class="ssh-form-item" style="flex:1">
+                <label>用户名</label>
+                <el-input v-model="sshForm.username" placeholder="root" size="large" />
+              </div>
+              <div class="ssh-form-item" style="flex:1">
+                <label>密码</label>
+                <el-input v-model="sshForm.password" type="password" show-password placeholder="服务器密码" size="large" @keyup.enter="connectServer" />
+              </div>
+            </div>
+            <el-button type="primary" size="large" :loading="sshConnecting" @click="connectServer" :disabled="!sshForm.host || !sshForm.password">
+              连接服务器
+            </el-button>
           </div>
-          <el-input v-model="projectPath" placeholder="/path/to/your/project" size="large" clearable @keyup.enter="detectProject">
-            <template #prefix><el-icon><Folder /></el-icon></template>
-            <template #append>
-              <el-button type="primary" :loading="detecting" @click="detectProject">
-                <el-icon v-if="!detecting"><Search /></el-icon>
-                检测
+          <!-- Connected State -->
+          <div v-else class="ssh-connected">
+            <div class="ssh-connected-info">
+              <span class="ssh-connected-icon">🖥️</span>
+              <div>
+                <div class="ssh-connected-host">{{ sshForm.host }}:{{ sshForm.port }}</div>
+                <div class="ssh-connected-user">{{ sshForm.username }}@{{ sshForm.host }}</div>
+              </div>
+            </div>
+            <el-button type="danger" size="small" plain @click="disconnectServer">
+              断开连接
+            </el-button>
+          </div>
+
+          <!-- Path Selection (only when connected) -->
+          <div v-if="sshConnected" class="path-section">
+            <div class="path-select-row">
+              <span class="path-select-label">远程项目：</span>
+              <el-select v-model="projectPath" placeholder="选择远程项目目录" filterable clearable size="large" style="flex:1" @change="onPathSelect" :loading="scanningPaths">
+                <el-option v-for="p in availablePaths" :key="p.path" :label="p.path" :value="p.path">
+                  <span>📁 {{ p.name }}</span>
+                  <span style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;">{{ p.path }}</span>
+                </el-option>
+              </el-select>
+              <el-button size="large" @click="scanRemotePaths" :loading="scanningPaths">
+                刷新
               </el-button>
-            </template>
-          </el-input>
+            </div>
+            <el-input v-model="projectPath" placeholder="或输入远程项目路径 /www/wwwroot/..." size="large" clearable @keyup.enter="detectProject">
+              <template #prefix><el-icon><Folder /></el-icon></template>
+              <template #append>
+                <el-button type="primary" :loading="detecting" @click="detectProject" :disabled="!sshConnected">
+                  <el-icon v-if="!detecting"><Search /></el-icon>
+                  检测
+                </el-button>
+              </template>
+            </el-input>
+          </div>
         </div>
       </section>
 
@@ -799,6 +847,13 @@ export default {
       loginForm: { username: '', password: '', confirmPassword: '' },
       isLoggedIn: false,
       loggedInUsername: '',
+      // SSH Connection
+      sshForm: { host: '', port: 22, username: 'root', password: '' },
+      sshConnecting: false,
+      sshSessionId: null,
+      sshHostInfo: '',
+      sshConnected: false,
+      scanningPaths: false,
       // Deploy tab
       availablePaths: [],
       guideExpanded: true,
@@ -907,7 +962,7 @@ export default {
       this.adminLoginVisible = true
     }
 
-    this.loadAvailablePaths()
+    // Paths are now loaded after SSH connection, not on mount
     this.loadServers()
     this.checkPaymentStatus()
     this.checkAdminStatus()
@@ -1163,12 +1218,63 @@ export default {
       return false
     },
     // ===== Deploy =====
-    async loadAvailablePaths() {
+    async connectServer() {
+      if (!this.sshForm.host || !this.sshForm.password) {
+        this.$message.warning('请填写服务器 IP 和密码')
+        return
+      }
+      this.sshConnecting = true
       try {
-        const res = await axios.get('/api/deploy/list-paths')
+        const res = await axios.post('/api/deploy/connect', {
+          host: this.sshForm.host,
+          port: this.sshForm.port || 22,
+          username: this.sshForm.username || 'root',
+          password: this.sshForm.password,
+        })
+        this.sshSessionId = res.data.session_id
+        this.sshHostInfo = res.data.hostname || res.data.host
+        this.sshConnected = true
+        this.$message.success(res.data.message)
+        // Auto scan remote paths after connection
+        this.scanRemotePaths()
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || 'SSH 连接失败')
+      } finally {
+        this.sshConnecting = false
+      }
+    },
+    async disconnectServer() {
+      if (this.sshSessionId) {
+        try {
+          await axios.post('/api/deploy/disconnect?session_id=' + this.sshSessionId)
+        } catch (e) { /* ignore */ }
+      }
+      this.sshSessionId = null
+      this.sshConnected = false
+      this.sshHostInfo = ''
+      this.availablePaths = []
+      this.projectPath = ''
+      this.projectInfo = null
+      this.scriptOutput = ''
+      this.$message.info('已断开服务器连接')
+    },
+    async scanRemotePaths() {
+      if (!this.sshSessionId) {
+        this.$message.warning('请先连接服务器')
+        return
+      }
+      this.scanningPaths = true
+      try {
+        const res = await axios.get('/api/deploy/list-paths?session_id=' + this.sshSessionId)
         this.availablePaths = res.data || []
-      } catch (e) {
-        console.log('Failed to load paths', e)
+        if (this.availablePaths.length === 0) {
+          this.$message.info('远程服务器未找到项目目录')
+        }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '扫描远程目录失败')
+        this.availablePaths = []
+      } finally {
+        this.scanningPaths = false
       }
     },
     onPathSelect(val) {
@@ -1176,11 +1282,15 @@ export default {
     },
     async detectProject() {
       if (!this.projectPath.trim()) { this.$message.warning('请输入项目路径'); return }
+      if (!this.sshConnected) { this.$message.warning('请先连接远程服务器'); return }
       this.detecting = true
       this.projectInfo = null
       this.scriptOutput = ''
       try {
-        const res = await axios.post('/api/deploy/detect', { path: this.projectPath })
+        const res = await axios.post('/api/deploy/detect', {
+          path: this.projectPath,
+          session_id: this.sshSessionId,
+        })
         this.projectInfo = res.data
         this.domain = res.data.project_name
         this.$message.success('项目检测完成')
@@ -1196,6 +1306,9 @@ export default {
       this.remoteStatus = ''
       try {
         const payload = { path: this.projectPath, deploy_type: this.deployType, domain: this.domain || undefined }
+        if (this.sshSessionId) {
+          payload.session_id = this.sshSessionId
+        }
         if (this.deployType === 'server' && this.servers.length > 0) {
           payload.server = this.servers[this.selectedServerIdx]
         }
@@ -1223,14 +1336,19 @@ export default {
       this.remoteStatus = 'connecting'
 
       try {
+        const deployBody = {
+          script: this.scriptOutput,
+          project_path: this.projectPath,
+        }
+        if (this.sshSessionId) {
+          deployBody.session_id = this.sshSessionId
+        } else {
+          deployBody.server_index = this.selectedServerIdx
+        }
         const resp = await fetch('/api/deploy/remote', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            server_index: this.selectedServerIdx,
-            script: this.scriptOutput,
-            project_path: this.projectPath,
-          }),
+          body: JSON.stringify(deployBody),
         })
 
         const reader = resp.body.getReader()
@@ -1449,6 +1567,23 @@ export default {
 /* Path Select Row */
 .path-select-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .path-select-label { font-size: 13px; color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
+
+/* SSH Connection Form */
+.ssh-form { display: flex; flex-direction: column; gap: 12px; }
+.ssh-form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.ssh-form-item { display: flex; flex-direction: column; gap: 6px; }
+.ssh-form-item label { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
+.connected-badge { margin-left: auto; }
+
+/* SSH Connected State */
+.ssh-connected { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(63, 185, 80, 0.08); border: 1px solid rgba(63, 185, 80, 0.2); border-radius: 8px; }
+.ssh-connected-info { display: flex; align-items: center; gap: 12px; }
+.ssh-connected-icon { font-size: 24px; }
+.ssh-connected-host { font-size: 15px; font-weight: 600; color: var(--accent-green); }
+.ssh-connected-user { font-size: 12px; color: var(--text-secondary); font-family: monospace; }
+
+/* Path Section */
+.path-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color); }
 
 .result-summary { display: flex; gap: 8px; margin-left: auto; }
 .selected-count { font-size: 13px; color: var(--accent-purple); margin-left: auto; }

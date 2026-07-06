@@ -4,12 +4,14 @@ Deploy API routes
 
 import os
 import io
+import uuid
 import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import paramiko
 
 # Import core logic from src
 from src.cli import detect_project_type, generate_deploy_script, generate_dockerfile, generate_nginx_config
@@ -17,11 +19,54 @@ from web.api.servers import get_server_credentials, load_config
 
 router = APIRouter()
 
+# ============ SSH Session Store (in-memory) ============
+ssh_sessions: dict = {}  # session_id -> { "client": paramiko.SSHClient, "info": {...} }
+
+
+def _get_ssh_client(session_id: str) -> paramiko.SSHClient:
+    """Get SSH client by session ID, raise 400 if not found or disconnected."""
+    session = ssh_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=400, detail="SSH 会话不存在或已过期，请重新连接")
+    client = session["client"]
+    transport = client.get_transport()
+    if transport is None or not transport.is_active():
+        ssh_sessions.pop(session_id, None)
+        raise HTTPException(status_code=400, detail="SSH 连接已断开，请重新连接")
+    return client
+
+
+def _exec_ssh_command(client: paramiko.SSHClient, command: str, timeout: int = 30) -> tuple:
+    """Execute a command on remote server via SSH, return (stdout_str, stderr_str, exit_code)."""
+    stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    out = stdout.read().decode("utf-8", errors="replace")
+    err = stderr.read().decode("utf-8", errors="replace")
+    exit_code = stdout.channel.recv_exit_status()
+    return out, err, exit_code
+
 
 # ============ Request / Response Models ============
 
+class ConnectRequest(BaseModel):
+    host: str
+    port: int = 22
+    username: str = "root"
+    password: Optional[str] = None
+    key_content: Optional[str] = None
+
+
+class ListPathsRequest(BaseModel):
+    session_id: str
+
+
 class DetectRequest(BaseModel):
     path: str
+    session_id: Optional[str] = None  # If provided, detect on remote server
+
+
+class RemoteDetectRequest(BaseModel):
+    path: str
+    session_id: str
 
 
 class GenerateRequest(BaseModel):
@@ -29,6 +74,7 @@ class GenerateRequest(BaseModel):
     deploy_type: str  # "server" | "cloudflare" | "docker" | "local"
     server: Optional[dict] = None
     domain: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class GenerateResponse(BaseModel):
@@ -39,55 +85,374 @@ class GenerateResponse(BaseModel):
 
 # ============ Routes ============
 
-@router.get("/list-paths")
-async def list_project_paths():
-    """Scan common directories and return subdirectory paths"""
-    import stat
-    
-    scan_dirs = ["/www/wwwroot/", "/root/", "/home/"]
-    skip_names = {
-        "node_modules", "venv", ".venv", "env", "__pycache__",
-        ".git", ".svn", ".hg", "cache", "tmp", "temp", ".cache",
-        ".local", ".npm", ".nvm", ".pyenv", ".rbenv", ".rustup",
-        ".cargo", ".config", ".ssh", ".aws", ".docker",
-    }
-    results = []
+@router.post("/connect")
+async def connect_server(req: ConnectRequest):
+    """Connect to a remote server via SSH and return a session ID."""
+    if not req.host.strip():
+        raise HTTPException(status_code=400, detail="请输入服务器 IP/域名")
+    if not req.password and not req.key_content:
+        raise HTTPException(status_code=400, detail="请提供密码或密钥")
 
-    for base in scan_dirs:
-        if not os.path.isdir(base):
-            continue
-        try:
-            entries = os.listdir(base)
-        except PermissionError:
-            continue
-        for name in sorted(entries):
-            if name.startswith(".") or name in skip_names:
-                continue
-            full = os.path.join(base, name)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    loop = asyncio.get_event_loop()
+
+    def _connect():
+        connect_kwargs = {
+            "hostname": req.host.strip(),
+            "port": req.port,
+            "username": req.username,
+            "timeout": 15,
+        }
+        if req.key_content:
+            key_file_obj = io.StringIO(req.key_content)
             try:
-                if os.path.isdir(full):
-                    results.append({"path": full, "name": name})
-            except (PermissionError, OSError):
-                continue
+                pkey = paramiko.RSAKey.from_private_key(key_file_obj)
+            except Exception:
+                key_file_obj = io.StringIO(req.key_content)
+                try:
+                    pkey = paramiko.Ed25519Key.from_private_key(key_file_obj)
+                except Exception:
+                    key_file_obj = io.StringIO(req.key_content)
+                    pkey = paramiko.ECDSAKey.from_private_key(key_file_obj)
+            connect_kwargs["pkey"] = pkey
+        elif req.password:
+            connect_kwargs["password"] = req.password
+        else:
+            raise RuntimeError("需要提供密码或密钥")
 
+        client.connect(**connect_kwargs)
+
+    try:
+        await loop.run_in_executor(None, _connect)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"SSH 连接失败: {str(e)}")
+
+    # Verify connection by running a simple command
+    try:
+        _, _, exit_code = await loop.run_in_executor(
+            None, lambda: _exec_ssh_command(client, "echo ok", timeout=10)
+        )
+    except Exception as e:
+        client.close()
+        raise HTTPException(status_code=400, detail=f"连接验证失败: {str(e)}")
+
+    session_id = str(uuid.uuid4())[:8]
+    ssh_sessions[session_id] = {
+        "client": client,
+        "info": {
+            "host": req.host.strip(),
+            "port": req.port,
+            "username": req.username,
+        },
+        "password": req.password,
+        "key_content": req.key_content,
+    }
+
+    # Get remote hostname for display
+    try:
+        hostname_out, _, _ = await loop.run_in_executor(
+            None, lambda: _exec_ssh_command(client, "hostname", timeout=10)
+        )
+        hostname = hostname_out.strip()
+    except Exception:
+        hostname = req.host.strip()
+
+    return {
+        "session_id": session_id,
+        "host": req.host.strip(),
+        "hostname": hostname,
+        "message": f"成功连接到 {hostname} ({req.host.strip()})",
+    }
+
+
+@router.post("/disconnect")
+async def disconnect_server(session_id: str):
+    """Disconnect and remove SSH session."""
+    session = ssh_sessions.pop(session_id, None)
+    if not session:
+        return {"message": "会话不存在或已断开"}
+    try:
+        session["client"].close()
+    except Exception:
+        pass
+    return {"message": "已断开连接"}
+
+
+@router.get("/list-paths")
+async def list_project_paths(session_id: str = None):
+    """Scan common directories on REMOTE server via SSH."""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="请先连接远程服务器")
+
+    client = _get_ssh_client(session_id)
+
+    loop = asyncio.get_event_loop()
+
+    scan_dirs = ["/www/wwwroot/", "/root/", "/home/"]
+
+    # Build the find command - scan one level of subdirectories
+    # Using find with maxdepth 2 to get subdirs within scan_dirs
+    dir_checks = " ".join([f'[ -d "{d}" ] && ls -1 "{d}"' for d in scan_dirs])
+    command = f"""
+SKIP_NAMES="node_modules venv .venv env __pycache__ .git .svn .hg cache tmp temp .cache .local .npm .nvm .pyenv .rbenv .rustup .cargo .config .ssh .aws .docker"
+for base in {{" ".join(scan_dirs)}}; do
+    if [ -d "$base" ]; then
+        for entry in $(ls -1 "$base" 2>/dev/null | sort); do
+            # Skip hidden and common non-project dirs
+            case "$entry" in
+                .*|node_modules|venv|.venv|env|__pycache__|.git|.svn|.hg|cache|tmp|temp|.cache|.local|.npm|.nvm|.pyenv|.rbenv|.rustup|.cargo|.config|.ssh|.aws|.docker)
+                    continue
+                    ;;
+            esac
+            if [ -d "$base$entry" ]; then
+                echo "$base$entry|$entry"
+            fi
+        done
+    fi
+done
+""".strip()
+
+    def _scan():
+        out, err, code = _exec_ssh_command(client, command, timeout=30)
+        results = []
+        for line in out.strip().split("\n"):
+            line = line.strip()
+            if not line or "|" not in line:
+                continue
+            path, name = line.split("|", 1)
+            results.append({"path": path, "name": name})
+        return results
+
+    results = await loop.run_in_executor(None, _scan)
     return results
 
 
 @router.post("/detect")
 async def detect_project(req: DetectRequest):
-    """Detect project type from a given path"""
+    """Detect project type. If session_id is provided, detect on remote server."""
     project_path = req.path.strip()
 
-    if not os.path.isdir(project_path):
-        raise HTTPException(status_code=400, detail=f"目录不存在: {project_path}")
+    if not project_path:
+        raise HTTPException(status_code=400, detail="请输入项目路径")
 
-    try:
-        info = detect_project_type(project_path)
-        info["project_name"] = os.path.basename(os.path.abspath(project_path))
-        info["path"] = project_path
-        return info
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"检测失败: {str(e)}")
+    if req.session_id:
+        # Remote detection via SSH
+        client = _get_ssh_client(req.session_id)
+        loop = asyncio.get_event_loop()
+
+        # Check if directory exists on remote
+        def _check_remote():
+            out, _, code = _exec_ssh_command(client, f'[ -d "{project_path}" ] && echo "exists" || echo "not_found"')
+            return out.strip()
+
+        result = await loop.run_in_executor(None, _check_remote)
+        if result != "exists":
+            raise HTTPException(status_code=400, detail=f"远程目录不存在: {project_path}")
+
+        # Collect remote file listing for detection
+        def _collect_remote_info():
+            # Get file listing
+            out, _, _ = _exec_ssh_command(client, f'find "{project_path}" -maxdepth 2 -type f | head -200')
+            files = out.strip().split("\n")
+
+            # Get key files content for detection
+            info = {"files": files, "path": project_path}
+
+            # Check package.json
+            out, _, code = _exec_ssh_command(client, f'[ -f "{project_path}/package.json" ] && cat "{project_path}/package.json"', timeout=10)
+            if code == 0:
+                info["package.json"] = out
+
+            # Check requirements.txt
+            out, _, code = _exec_ssh_command(client, f'[ -f "{project_path}/requirements.txt" ] && cat "{project_path}/requirements.txt"', timeout=10)
+            if code == 0:
+                info["requirements.txt"] = out
+
+            # Check other indicators
+            for fname in ["Dockerfile", "docker-compose.yml", "go.mod", "pom.xml", "build.gradle",
+                          "manage.py", "app.py", "main.py", "index.js", "index.ts", "index.php",
+                          "composer.json", "Cargo.toml", "Gemfile", "next.config.js", "nuxt.config.js",
+                          "vite.config.js", "vite.config.ts", "webpack.config.js", ".env", "README.md"]:
+                out, _, code = _exec_ssh_command(
+                    client,
+                    f'[ -f "{project_path}/{fname}" ] && echo "exists"',
+                    timeout=5
+                )
+                if code == 0 and out.strip() == "exists":
+                    info[fname] = "exists"
+
+            return info
+
+        remote_info = await loop.run_in_executor(None, _collect_remote_info)
+
+        # Build a simulated local detection based on remote file info
+        project_info = _detect_from_remote_info(remote_info, project_path)
+        project_info["project_name"] = os.path.basename(project_path.rstrip("/"))
+        project_info["path"] = project_path
+        project_info["remote"] = True
+        return project_info
+    else:
+        # Local detection (fallback, same as before)
+        if not os.path.isdir(project_path):
+            raise HTTPException(status_code=400, detail=f"目录不存在: {project_path}")
+
+        try:
+            info = detect_project_type(project_path)
+            info["project_name"] = os.path.basename(os.path.abspath(project_path))
+            info["path"] = project_path
+            return info
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"检测失败: {str(e)}")
+
+
+def _detect_from_remote_info(remote_info: dict, project_path: str) -> dict:
+    """Detect project type based on remote file listing (since we can't use local detect_project_type)."""
+    import json
+
+    files = remote_info.get("files", [])
+    info = {
+        "type": "unknown",
+        "framework": None,
+        "package_manager": None,
+        "has_docker": False,
+        "entry_point": None,
+        "dependencies": [],
+        "remote": True,
+    }
+
+    # Check for Docker
+    if "Dockerfile" in remote_info or "docker-compose.yml" in remote_info:
+        info["has_docker"] = True
+
+    # Check Node.js
+    if "package.json" in remote_info:
+        try:
+            pkg = json.loads(remote_info["package.json"])
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            info["dependencies"] = list(deps.keys())
+
+            # Determine framework
+            if "next" in deps:
+                info["framework"] = "nextjs"
+            elif "nuxt" in deps or "nuxt3" in deps:
+                info["framework"] = "nuxtjs"
+            elif "react" in deps:
+                info["framework"] = "react"
+            elif "vue" in deps:
+                info["framework"] = "vue"
+            elif "@angular/core" in deps:
+                info["framework"] = "angular"
+            elif "svelte" in deps:
+                info["framework"] = "svelte"
+
+            # Determine package manager
+            if "vite.config.js" in remote_info or "vite.config.ts" in remote_info:
+                info["framework"] = info["framework"] or "vite-project"
+
+            # Package manager detection
+            info["package_manager"] = "npm"
+            for f in files:
+                if "pnpm-lock.yaml" in f:
+                    info["package_manager"] = "pnpm"
+                    break
+                elif "yarn.lock" in f:
+                    info["package_manager"] = "yarn"
+                    break
+                elif "bun.lockb" in f or "bun.lock" in f:
+                    info["package_manager"] = "bun"
+                    break
+
+            info["type"] = "nodejs"
+
+            # Entry point
+            if "next.config.js" in remote_info:
+                info["entry_point"] = "next"
+            elif "nuxt.config.js" in remote_info:
+                info["entry_point"] = "nuxt"
+            elif "index.js" in remote_info:
+                info["entry_point"] = "index.js"
+            elif "index.ts" in remote_info:
+                info["entry_point"] = "index.ts"
+
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    # Check Python
+    if info["type"] == "unknown":
+        has_python = False
+        for f in files:
+            if f.endswith(".py"):
+                has_python = True
+                break
+        if has_python or "requirements.txt" in remote_info:
+            info["type"] = "python"
+
+            # Check framework from requirements.txt
+            req_content = remote_info.get("requirements.txt", "")
+            if "django" in req_content.lower():
+                info["framework"] = "django"
+            elif "flask" in req_content.lower():
+                info["framework"] = "flask"
+            elif "fastapi" in req_content.lower():
+                info["framework"] = "fastapi"
+
+            # Entry point
+            if "manage.py" in remote_info:
+                info["entry_point"] = "manage.py"
+            elif "app.py" in remote_info:
+                info["entry_point"] = "app.py"
+            elif "main.py" in remote_info:
+                info["entry_point"] = "main.py"
+
+            # Package manager
+            info["package_manager"] = "pip"
+
+    # Check Go
+    if info["type"] == "unknown" and "go.mod" in remote_info:
+        info["type"] = "go"
+        info["framework"] = "go"
+        info["package_manager"] = "go mod"
+
+    # Check Java
+    if info["type"] == "unknown":
+        if "pom.xml" in remote_info:
+            info["type"] = "java"
+            info["framework"] = "maven"
+            info["package_manager"] = "maven"
+        elif "build.gradle" in remote_info:
+            info["type"] = "java"
+            info["framework"] = "gradle"
+            info["package_manager"] = "gradle"
+
+    # Check PHP
+    if info["type"] == "unknown":
+        if "composer.json" in remote_info:
+            info["type"] = "php"
+            info["framework"] = "composer"
+            info["package_manager"] = "composer"
+        elif "index.php" in remote_info:
+            info["type"] = "php"
+            info["framework"] = None
+            info["entry_point"] = "index.php"
+
+    # Check Rust
+    if info["type"] == "unknown" and "Cargo.toml" in remote_info:
+        info["type"] = "rust"
+        info["package_manager"] = "cargo"
+
+    # Check static site
+    if info["type"] == "unknown":
+        has_html = False
+        for f in files:
+            if f.endswith(".html") or f.endswith(".htm"):
+                has_html = True
+                break
+        if has_html:
+            info["type"] = "static"
+
+    return info
 
 
 @router.post("/generate")
@@ -95,20 +460,50 @@ async def generate_script(req: GenerateRequest):
     """Generate deployment script"""
     project_path = req.path.strip()
 
-    if not os.path.isdir(project_path):
-        raise HTTPException(status_code=400, detail=f"目录不存在: {project_path}")
+    if not project_path:
+        raise HTTPException(status_code=400, detail="请输入项目路径")
 
     try:
-        project_info = detect_project_type(project_path)
-        project_name = os.path.basename(os.path.abspath(project_path))
+        # Detect project (remote or local based on session_id)
+        if req.session_id:
+            client = _get_ssh_client(req.session_id)
+            loop = asyncio.get_event_loop()
+
+            # Check directory exists
+            def _check():
+                out, _, code = _exec_ssh_command(client, f'[ -d "{project_path}" ] && echo "exists" || echo "not_found"')
+                return out.strip()
+
+            result = await loop.run_in_executor(None, _check)
+            if result != "exists":
+                raise HTTPException(status_code=400, detail=f"远程目录不存在: {project_path}")
+
+            # Collect remote info for generate
+            def _collect():
+                info = {"files": [], "path": project_path}
+                for fname in ["package.json", "requirements.txt", "Dockerfile", "docker-compose.yml",
+                              "go.mod", "pom.xml", "build.gradle", "manage.py", "app.py", "main.py",
+                              "index.js", "index.ts", "index.php", "composer.json", "Cargo.toml",
+                              "vite.config.js", "vite.config.ts", "next.config.js"]:
+                    out, _, code = _exec_ssh_command(client, f'[ -f "{project_path}/{fname}" ] && cat "{project_path}/{fname}"', timeout=10)
+                    if code == 0:
+                        info[fname] = out
+                return info
+
+            remote_info = await loop.run_in_executor(None, _collect)
+            project_info = _detect_from_remote_info(remote_info, project_path)
+        elif os.path.isdir(project_path):
+            project_info = detect_project_type(project_path)
+        else:
+            raise HTTPException(status_code=400, detail=f"目录不存在: {project_path}")
+
+        project_name = os.path.basename(project_path.rstrip("/"))
         extra_files = []
 
         if req.deploy_type == "docker":
-            # Generate Dockerfile
             script = generate_dockerfile(project_info)
             filename = "Dockerfile"
         elif req.deploy_type == "cloudflare":
-            # Cloudflare Pages deploy
             pm = project_info.get("package_manager") or "npm"
             fw = project_info.get("framework", "")
             output_dir = "dist"
@@ -140,12 +535,10 @@ echo "✅ 部署完成！"
             script = script.replace("PROJECT_NAME", project_name)
             filename = "deploy.sh"
 
-            # Also generate nginx config
             nginx_conf = generate_nginx_config(project_info, domain)
             nginx_conf = nginx_conf.replace("PROJECT_NAME", project_name)
             extra_files.append({"filename": "nginx.conf", "content": nginx_conf})
         else:
-            # Local script
             server = {"host": "YOUR_SERVER_IP", "baota": False}
             script = generate_deploy_script(project_info, server, project_name)
             script = script.replace("PROJECT_NAME", project_name)
@@ -156,6 +549,8 @@ echo "✅ 部署完成！"
             "filename": filename,
             "extra_files": extra_files,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
 
@@ -181,13 +576,32 @@ class RemoteDeployRequest(BaseModel):
     key_content: Optional[str] = None
     script: str  # The deployment script to execute
     project_path: Optional[str] = None
+    session_id: Optional[str] = None  # Use SSH session
 
 
 @router.post("/remote")
 async def remote_deploy(req: RemoteDeployRequest):
     """Remote deploy via SSH - returns SSE stream of logs"""
-    # Resolve server credentials
-    if req.server_index is not None:
+    # If session_id is provided, use the existing SSH session
+    if req.session_id:
+        session = ssh_sessions.get(req.session_id)
+        if not session:
+            raise HTTPException(status_code=400, detail="SSH 会话不存在或已过期，请重新连接")
+        creds = {
+            "host": session["info"]["host"],
+            "port": session["info"]["port"],
+            "user": session["info"]["username"],
+        }
+        # Get password/key from session if available
+        if "password" in session:
+            creds["password"] = session["password"]
+        if "key_content" in session:
+            creds["key_content"] = session["key_content"]
+        # If no password in session, try to get from the stored connect info
+        # We need to re-store password in session
+        if not creds.get("password") and not creds.get("key_content"):
+            creds["password"] = session.get("password")
+    elif req.server_index is not None:
         config = load_config()
         servers = config.get("servers", [])
         if req.server_index < 0 or req.server_index >= len(servers):
@@ -220,7 +634,6 @@ async def remote_deploy(req: RemoteDeployRequest):
 
 async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] = None):
     """Generator that streams deployment logs via SSE"""
-    import paramiko
 
     def _send_event(event_type: str, data: str):
         return f"event: {event_type}\ndata: {data}\n\n"
@@ -233,7 +646,6 @@ async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] =
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     try:
-        # Connect in thread to avoid blocking
         loop = asyncio.get_event_loop()
 
         def _connect():
@@ -274,15 +686,12 @@ async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] =
         yield _send_event("status", "uploading")
 
         def _upload_and_exec():
-            # Create temp script on remote
             remote_script_path = "/tmp/ai-auto-deploy.sh"
 
-            # Prepend cd command if project_path is given
             full_script = script
             if project_path:
                 full_script = f"cd {project_path}\n{script}"
 
-            # Ensure script has bash shebang and set -e
             if not full_script.startswith("#!"):
                 full_script = "#!/bin/bash\nset -e\n\n" + full_script
 
@@ -293,16 +702,13 @@ async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] =
             finally:
                 sftp.close()
 
-            # Make executable
             client.exec_command(f"chmod +x {remote_script_path}")
 
-            # Execute script
             stdin, stdout, stderr = client.exec_command(
                 f"bash {remote_script_path}",
                 timeout=600,
             )
 
-            # Read output in real time
             import select
             output_lines = []
 
@@ -317,7 +723,6 @@ async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] =
                         output_lines.append(("stderr", line.rstrip()))
 
                 if stdout.channel.exit_status_ready():
-                    # Read remaining
                     while stdout.channel.recv_ready():
                         line = stdout.readline()
                         if line:
@@ -334,7 +739,6 @@ async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] =
 
             exit_code = stdout.channel.recv_exit_status()
 
-            # Cleanup
             client.exec_command(f"rm -f {remote_script_path}")
 
             return output_lines, exit_code
@@ -344,14 +748,12 @@ async def _stream_deploy(creds: dict, script: str, project_path: Optional[str] =
 
         yield _send_event("status", "executing")
 
-        # Stream all collected output
         for stream_type, line in output_lines:
             if stream_type == "stderr":
                 yield _send_event("log", f"⚠️ {line}")
             else:
                 yield _send_event("log", line)
 
-        # Final status
         if exit_code == 0:
             yield _send_event("log", "🎉 部署完成！")
             yield _send_event("status", "success")
