@@ -20,7 +20,7 @@ router = APIRouter()
 # 豆包 AI 配置
 ARK_API_KEY = "ark-4f063f47-ee3d-45a2-a6db-677cc71cf784-041e9"
 DOUBAO_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3"
-DOUBAO_MODEL_ID = "ep-20260623003404-7lqtt"
+DOUBAO_MODEL_ID = "ep-20260707225043-z7nkm"
 
 
 # ============ Models ============
