@@ -502,81 +502,98 @@
       <!-- Tip section -->
       <section class="step-section">
         <div class="editcode-tips">
-          <div class="editcode-tips-title">💡 可以修改的内容：</div>
+          <div class="editcode-tips-title">🤖 AI 代码修改助手</div>
           <ul class="editcode-tips-list">
-            <li>项目配置文件（如 .env、config.py、settings.py）</li>
-            <li>路由文件（修改 URL 路径、页面逻辑）</li>
-            <li>静态资源文件（HTML/CSS/JS 微调）</li>
-            <li>数据库连接配置</li>
-            <li>API 接口参数</li>
+            <li>粘贴需要修改的代码</li>
+            <li>用自然语言描述你想要的修改</li>
+            <li>AI 自动修改并生成对比结果</li>
+            <li>支持任何编程语言的代码修改</li>
+            <li>一键复制修改后的代码</li>
           </ul>
-          <div class="editcode-tips-warn">⚠️ 修改前请确认了解文件用途，错误修改可能导致项目无法运行</div>
+          <div class="editcode-tips-warn">💡 无需连接服务器，直接粘贴代码即可修改</div>
         </div>
       </section>
 
-      <!-- Step 1: File Path -->
+      <!-- Step 1: Input original code -->
       <section class="step-section">
         <div class="step-header">
           <span class="step-num edit-num">1</span>
-          <span class="step-title">输入文件路径</span>
-          <el-tag v-if="!sshConnected" type="warning" effect="dark" size="small">需先连接服务器</el-tag>
+          <span class="step-title">粘贴原始代码</span>
         </div>
         <div class="step-body">
-          <div v-if="!sshConnected" class="ssh-required-notice">
-            <span class="ssh-required-icon">🔗</span>
-            <p>请先在「部署」Tab 中连接远程服务器</p>
-            <el-button type="primary" size="small" @click="activeTab = 'deploy'">前往连接</el-button>
-          </div>
-          <div v-else class="editcode-form">
-            <el-input v-model="editFilePath" placeholder="输入远程文件绝对路径，如 /www/wwwroot/myproject/.env" size="large" clearable @keyup.enter="readRemoteFile">
-              <template #prefix><el-icon><Document /></el-icon></template>
-              <template #append>
-                <el-button type="primary" :loading="editFileLoading" @click="readRemoteFile">
-                  <el-icon v-if="!editFileLoading"><FolderOpened /></el-icon>
-                  读取文件
-                </el-button>
-              </template>
-            </el-input>
-            <div class="editcode-quick-paths" v-if="editFilePathHistory.length > 0">
-              <span class="quick-paths-label">最近打开：</span>
-              <el-tag v-for="(p, i) in editFilePathHistory" :key="i" size="small" effect="plain" class="quick-path-tag" @click="editFilePath = p; readRemoteFile()">
-                {{ p.split('/').pop() }}
-              </el-tag>
-            </div>
+          <div class="editcode-form">
+            <el-input
+              v-model="editFileContent"
+              type="textarea"
+              :autosize="{ minRows: 8, maxRows: 30 }"
+              class="editcode-editor"
+              placeholder="粘贴需要修改的代码..."
+              spellcheck="false"
+            />
           </div>
         </div>
       </section>
 
-      <!-- Step 2: Editor -->
-      <section v-if="editFileContent !== null" class="step-section fade-in">
+      <!-- Step 2: Describe modification -->
+      <section class="step-section">
         <div class="step-header">
           <span class="step-num edit-num">2</span>
-          <span class="step-title">编辑文件</span>
-          <span class="editcode-file-info">
-            <el-tag size="small" type="info">{{ editFilePath.split('/').pop() }}</el-tag>
-            <span v-if="editFileInfo.size" class="dim">{{ formatFileSize(editFileInfo.size) }}</span>
-          </span>
+          <span class="step-title">描述修改需求</span>
         </div>
         <div class="step-body">
-          <div class="editcode-editor-wrapper">
+          <div class="editcode-form">
             <el-input
-              v-model="editFileContent"
+              v-model="editCodeDescription"
               type="textarea"
-              :autosize="{ minRows: 10, maxRows: 40 }"
+              :autosize="{ minRows: 3, maxRows: 8 }"
+              placeholder="描述你想要的修改，例如：把这段代码改成异步的、添加错误处理、优化性能..."
               class="editcode-editor"
-              spellcheck="false"
             />
           </div>
+        </div>
+      </section>
+
+      <!-- Step 3: Execute and results -->
+      <section class="step-section">
+        <div class="step-header">
+          <span class="step-num edit-num">3</span>
+          <span class="step-title">AI 修改</span>
+        </div>
+        <div class="step-body">
           <div class="editcode-actions">
-            <el-button type="primary" size="large" :loading="editFileSaving" @click="writeRemoteFile">
-              💾 保存文件
+            <el-button type="primary" size="large" :loading="editCodeLoading" @click="aiModifyCode" :disabled="!editFileContent || !editCodeDescription">
+              🤖 AI 修改代码
             </el-button>
-            <el-button size="large" @click="readRemoteFile" :loading="editFileLoading">
-              🔄 重新加载
+            <span v-if="!paymentStatus.paid" class="pay-hint">
+              <el-icon><Lock /></el-icon> 需要开通会员
+            </span>
+            <el-button v-if="editCodeResult" size="large" @click="editCodeResult = ''; editFileContent = ''; editCodeDescription = ''">
+              ✕ 清空
             </el-button>
-            <el-button size="large" @click="editFileContent = null; editFileInfo = {}">
-              ✕ 关闭
-            </el-button>
+          </div>
+
+          <!-- Diff result -->
+          <div v-if="editCodeResult" class="repair-results fade-in">
+            <h4>📝 修改对比</h4>
+            <div class="repair-item">
+              <div class="repair-file-header">
+                <span class="repair-filename">代码修改结果</span>
+                <el-button type="success" size="small" @click="copyModifiedCode">
+                  📋 复制修改后代码
+                </el-button>
+              </div>
+              <div class="diff-container">
+                <div class="diff-side">
+                  <div class="diff-label">原始代码</div>
+                  <pre class="diff-code original"><code>{{ editFileContent }}</code></pre>
+                </div>
+                <div class="diff-divider"></div>
+                <div class="diff-side">
+                  <div class="diff-label">修改后代码</div>
+                  <pre class="diff-code fixed"><code>{{ editCodeResult }}</code></pre>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -1048,13 +1065,11 @@ export default {
       // User Profile
       userProfile: {},
       userProfileLoaded: false,
-      // Edit Code tab
-      editFilePath: '',
-      editFileContent: null,
-      editFileInfo: {},
-      editFileLoading: false,
-      editFileSaving: false,
-      editFilePathHistory: [],
+      // Edit Code tab (AI Code Modifier)
+      editFileContent: '',
+      editCodeDescription: '',
+      editCodeResult: '',
+      editCodeLoading: false,
       // Admin
       isAdmin: false,
       adminSubTab: 'dashboard',
@@ -1747,64 +1762,34 @@ export default {
     },
 
     // ===== Edit Code Tab =====
-    async readRemoteFile() {
-      if (!this.editFilePath.trim()) {
-        this.$message.warning('请输入文件路径')
-        return
-      }
-      if (!this.sshSessionId) {
-        this.$message.warning('请先连接远程服务器')
-        return
-      }
-      this.editFileLoading = true
+    async aiModifyCode() {
+      if (!(await this.requirePayment('modify-code'))) return
+      if (!this.editFileContent.trim()) { this.$message.warning('请粘贴原始代码'); return }
+      if (!this.editCodeDescription.trim()) { this.$message.warning('请输入修改需求'); return }
+
+      this.editCodeLoading = true
+      this.editCodeResult = ''
       try {
-        const res = await axios.get('/api/deploy/read-file', {
-          params: { session_id: this.sshSessionId, file_path: this.editFilePath.trim() },
+        const res = await axios.post('/api/generate/modify-code', {
+          code: this.editFileContent,
+          description: this.editCodeDescription,
+          user_id: this.userId,
         })
-        this.editFileContent = res.data.content
-        this.editFileInfo = {
-          size: res.data.file_size,
-          mtime: res.data.file_mtime,
+        this.editCodeResult = res.data.modified_code || ''
+        this.$message.success('代码修改完成')
+      } catch (err) {
+        if (err.response?.status === 402) {
+          this.showPaymentDialog()
+        } else {
+          this.$message.error(err.response?.data?.detail || 'AI 修改失败，请重试')
         }
-        // Add to history (deduplicate, max 5)
-        const path = this.editFilePath.trim()
-        this.editFilePathHistory = [path, ...this.editFilePathHistory.filter(p => p !== path)].slice(0, 5)
-        this.$message.success('文件读取成功')
-      } catch (err) {
-        this.$message.error(err.response?.data?.detail || '读取文件失败')
-      } finally {
-        this.editFileLoading = false
-      }
+      } finally { this.editCodeLoading = false }
     },
-    async writeRemoteFile() {
-      if (!this.editFilePath.trim() || this.editFileContent === null) {
-        this.$message.warning('没有可保存的内容')
-        return
+    copyModifiedCode() {
+      if (this.editCodeResult) {
+        navigator.clipboard.writeText(this.editCodeResult)
+        this.$message.success('已复制修改后的代码')
       }
-      if (!this.sshSessionId) {
-        this.$message.warning('请先连接远程服务器')
-        return
-      }
-      this.editFileSaving = true
-      try {
-        const res = await axios.post('/api/deploy/write-file', {
-          session_id: this.sshSessionId,
-          file_path: this.editFilePath.trim(),
-          content: this.editFileContent,
-        })
-        this.$message.success(res.data.message || '文件保存成功')
-      } catch (err) {
-        this.$message.error(err.response?.data?.detail || '保存文件失败')
-      } finally {
-        this.editFileSaving = false
-      }
-    },
-    formatFileSize(bytes) {
-      const n = parseInt(bytes)
-      if (isNaN(n)) return ''
-      if (n < 1024) return n + ' B'
-      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
-      return (n / (1024 * 1024)).toFixed(1) + ' MB'
     },
   },
 }
@@ -2075,19 +2060,10 @@ export default {
 .editcode-tips-list { list-style: none; padding: 0; margin: 0 0 12px 0; display: flex; flex-direction: column; gap: 6px; }
 .editcode-tips-list li { font-size: 13px; color: var(--text-secondary); padding-left: 20px; position: relative; line-height: 1.6; }
 .editcode-tips-list li::before { content: '✓'; position: absolute; left: 0; color: var(--accent-green); font-weight: 700; }
-.editcode-tips-warn { font-size: 13px; color: var(--accent-orange); padding: 10px 14px; background: rgba(210, 153, 34, 0.08); border: 1px solid rgba(210, 153, 34, 0.2); border-radius: 8px; margin-top: 8px; }
-.ssh-required-notice { text-align: center; padding: 24px 0; }
-.ssh-required-icon { font-size: 36px; display: block; margin-bottom: 8px; }
-.ssh-required-notice p { color: var(--text-secondary); font-size: 14px; margin-bottom: 12px; }
+.editcode-tips-warn { font-size: 13px; color: var(--accent-blue); padding: 10px 14px; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.2); border-radius: 8px; margin-top: 8px; }
 .editcode-form { display: flex; flex-direction: column; gap: 12px; }
-.editcode-quick-paths { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.quick-paths-label { font-size: 12px; color: var(--text-secondary); }
-.quick-path-tag { cursor: pointer; }
-.quick-path-tag:hover { color: var(--accent-blue); border-color: var(--accent-blue); }
-.editcode-file-info { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.editcode-editor-wrapper { margin-bottom: 16px; }
 .editcode-editor :deep(textarea) { font-family: 'JetBrains Mono', 'Fira Code', monospace !important; font-size: 13px !important; line-height: 1.6 !important; background: var(--terminal-bg) !important; color: var(--terminal-green) !important; border: 1px solid var(--border-color) !important; border-radius: 8px !important; padding: 16px !important; }
-.editcode-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.editcode-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
 
 /* Responsive */
 @media (max-width: 600px) {

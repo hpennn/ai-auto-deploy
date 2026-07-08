@@ -61,6 +61,12 @@ class DownloadProjectRequest(BaseModel):
     project_name: Optional[str] = None
 
 
+class ModifyCodeRequest(BaseModel):
+    code: str
+    description: str
+    user_id: Optional[str] = None
+
+
 # ============ AI 调用 ============
 
 def call_doubao_api(messages: list, temperature: float = 0.3) -> str:
@@ -211,6 +217,46 @@ async def get_stacks():
     """获取可用技术栈"""
     return {"stacks": TECH_STACKS}
 
+
+
+@router.post("/modify-code")
+async def modify_code(req: ModifyCodeRequest):
+    """AI 代码修改助手"""
+    # Check payment
+    if req.user_id and not is_paid(req.user_id):
+        raise HTTPException(status_code=402, detail="该功能需要付费使用")
+
+    if not req.code.strip():
+        raise HTTPException(status_code=400, detail="请输入原始代码")
+
+    if not req.description.strip():
+        raise HTTPException(status_code=400, detail="请输入修改需求")
+
+    prompt = (
+        "你是一个代码修改助手。用户会提供一段代码和修改需求，你需要根据需求修改代码并返回修改后的完整代码。\n\n"
+        "要求：\n"
+        "1. 只返回修改后的完整代码，不要加额外的解释\n"
+        "2. 保持原有的代码风格和缩进\n"
+        "3. 如果用户描述不明确，按最佳实践修改\n\n"
+        f"原始代码：\n{req.code}\n\n"
+        f"修改需求：\n{req.description}"
+    )
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一个专业的代码修改助手。你只返回修改后的完整代码，"
+                "不要加任何解释、注释说明或 markdown 代码块标记。"
+                "直接输出纯代码内容。"
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    modified_code = call_doubao_api(messages, temperature=0.3)
+
+    return {"modified_code": modified_code}
 
 @router.post("/download")
 async def download_project(req: DownloadProjectRequest):
