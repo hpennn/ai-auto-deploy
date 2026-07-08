@@ -7,11 +7,12 @@ import re
 import json
 import zipfile
 import tempfile
+import shutil
 from typing import Optional
 
 import requests
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from web.database import is_paid
@@ -61,10 +62,8 @@ class DownloadProjectRequest(BaseModel):
     project_name: Optional[str] = None
 
 
-class ModifyCodeRequest(BaseModel):
-    code: str
-    description: str
-    user_id: Optional[str] = None
+class ModifyCodeDownloadRequest(BaseModel):
+    files: list[dict]
 
 
 # ============ AI 调用 ============
@@ -83,7 +82,7 @@ def call_doubao_api(messages: list, temperature: float = 0.3) -> str:
                 "messages": messages,
                 "temperature": temperature,
             },
-            timeout=120,
+            timeout=180,
         )
         response.raise_for_status()
         data = response.json()
@@ -220,43 +219,122 @@ async def get_stacks():
 
 
 @router.post("/modify-code")
-async def modify_code(req: ModifyCodeRequest):
-    """AI 代码修改助手"""
-    # Check payment
-    if req.user_id and not is_paid(req.user_id):
+async def modify_code(
+    file: UploadFile = File(...),
+    description: str = Form(...),
+    user_id: str = Form(default=""),
+):
+    """AI 修改整个项目源码包"""
+    if user_id and not is_paid(user_id):
         raise HTTPException(status_code=402, detail="该功能需要付费使用")
 
-    if not req.code.strip():
-        raise HTTPException(status_code=400, detail="请输入原始代码")
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件不能超过 5MB")
 
-    if not req.description.strip():
+    if not description.strip():
         raise HTTPException(status_code=400, detail="请输入修改需求")
 
-    prompt = (
-        "你是一个代码修改助手。用户会提供一段代码和修改需求，你需要根据需求修改代码并返回修改后的完整代码。\n\n"
-        "要求：\n"
-        "1. 只返回修改后的完整代码，不要加额外的解释\n"
-        "2. 保持原有的代码风格和缩进\n"
-        "3. 如果用户描述不明确，按最佳实践修改\n\n"
-        f"原始代码：\n{req.code}\n\n"
-        f"修改需求：\n{req.description}"
-    )
+    tmp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(tmp_dir, "upload.zip")
+    code_files = []
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是一个专业的代码修改助手。你只返回修改后的完整代码，"
-                "不要加任何解释、注释说明或 markdown 代码块标记。"
-                "直接输出纯代码内容。"
-            ),
-        },
-        {"role": "user", "content": prompt},
-    ]
+    try:
+        with open(zip_path, "wb") as f:
+            f.write(contents)
 
-    modified_code = call_doubao_api(messages, temperature=0.3)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(tmp_dir)
 
-    return {"modified_code": modified_code}
+        code_exts = {".py", ".js", ".ts", ".vue", ".html", ".css", ".json", ".java",
+                     ".go", ".php", ".rb", ".jsx", ".tsx", ".yaml", ".yml", ".toml",
+                     ".cfg", ".ini", ".sh", ".sql", ".xml", ".md", ".c", ".cpp", ".h"}
+        skip_dirs = {"node_modules", "__pycache__", ".git", "dist", "build", ".venv",
+                     "venv", ".next", ".nuxt", "target", ".idea", ".vscode"}
+
+        for root, dirs, files in os.walk(tmp_dir):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in code_exts:
+                    fpath = os.path.join(root, fname)
+                    rel_path = os.path.relpath(fpath, tmp_dir)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as cf:
+                            file_content = cf.read()
+                        if file_content.strip():
+                            code_files.append({"path": rel_path, "content": file_content})
+                    except Exception:
+                        pass
+
+        if not code_files:
+            raise HTTPException(status_code=400, detail="ZIP 中未找到代码文件")
+
+        total_chars = 0
+        selected_files = []
+        for f in sorted(code_files, key=lambda x: len(x["content"]), reverse=True)[:20]:
+            if total_chars + len(f["content"]) > 25000:
+                break
+            selected_files.append(f)
+            total_chars += len(f["content"])
+
+        files_text = ""
+        for f in selected_files:
+            files_text += f"\n=== {f['path']} ===\n{f['content']}\n"
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一个专业的全栈代码修改助手。用户会上传项目源码并描述需要修改的内容。\n"
+                    "你需要分析整个项目结构，理解代码逻辑，然后根据用户描述进行修改。\n\n"
+                    "要求：\n"
+                    "1. 只返回被修改的文件的完整内容\n"
+                    "2. 以 JSON 数组格式返回：[{\"filename\": \"文件路径\", \"content\": \"修改后的完整代码\"}]\n"
+                    "3. 保持原有代码风格和缩进\n"
+                    "4. 只返回 JSON 数组，不要返回任何解释文字"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"修改需求：{description}\n\n以下是项目文件内容：\n{files_text}",
+            },
+        ]
+
+        result = call_doubao_api(messages, temperature=0.3)
+
+        try:
+            json_match = re.search(r"\[[\s\S]*\]", result)
+            if json_match:
+                modified_files = json.loads(json_match.group())
+            else:
+                modified_files = []
+        except json.JSONDecodeError:
+            modified_files = []
+
+        if not modified_files:
+            raise HTTPException(status_code=500, detail="AI 未能生成有效的修改结果，请尝试更具体的描述")
+
+        response_files = []
+        for mf in modified_files:
+            if not isinstance(mf, dict) or "filename" not in mf:
+                continue
+            original = ""
+            for sf in selected_files:
+                if sf["path"] == mf["filename"]:
+                    original = sf["content"]
+                    break
+            response_files.append({
+                "filename": mf["filename"],
+                "original": original,
+                "modified": mf.get("content", ""),
+            })
+
+        return {"files": response_files}
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
 
 @router.post("/download")
 async def download_project(req: DownloadProjectRequest):
@@ -281,3 +359,32 @@ async def download_project(req: DownloadProjectRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"打包失败: {str(e)}")
+
+
+@router.post("/modify-code/download")
+async def download_modified(req: ModifyCodeDownloadRequest):
+    """下载修改后的项目为 ZIP"""
+    if not req.files:
+        raise HTTPException(status_code=400, detail="没有可下载的文件")
+
+    tmp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(tmp_dir, "modified-project.zip")
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in req.files:
+                content = f.get("modified") or f.get("original", "")
+                if content:
+                    zf.writestr(f["filename"], content)
+
+        def iter_file():
+            with open(zip_path, "rb") as fh:
+                yield from fh
+
+        return StreamingResponse(
+            iter_file(),
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=modified-project.zip"},
+        )
+    finally:
+        pass

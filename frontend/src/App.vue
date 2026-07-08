@@ -499,37 +499,22 @@
 
     <!-- ============ 代码修改 Tab ============ -->
     <main v-if="activeTab === 'editcode'" class="main-content">
-      <!-- Tip section -->
-      <section class="step-section">
-        <div class="editcode-tips">
-          <div class="editcode-tips-title">🤖 AI 代码修改助手</div>
-          <ul class="editcode-tips-list">
-            <li>粘贴需要修改的代码</li>
-            <li>用自然语言描述你想要的修改</li>
-            <li>AI 自动修改并生成对比结果</li>
-            <li>支持任何编程语言的代码修改</li>
-            <li>一键复制修改后的代码</li>
-          </ul>
-          <div class="editcode-tips-warn">💡 无需连接服务器，直接粘贴代码即可修改</div>
-        </div>
-      </section>
-
-      <!-- Step 1: Input original code -->
+      <!-- Step 1: Upload project ZIP -->
       <section class="step-section">
         <div class="step-header">
           <span class="step-num edit-num">1</span>
-          <span class="step-title">粘贴原始代码</span>
+          <span class="step-title">上传项目源码</span>
         </div>
         <div class="step-body">
-          <div class="editcode-form">
-            <el-input
-              v-model="editFileContent"
-              type="textarea"
-              :autosize="{ minRows: 8, maxRows: 30 }"
-              class="editcode-editor"
-              placeholder="粘贴需要修改的代码..."
-              spellcheck="false"
-            />
+          <div class="upload-zone" @click="triggerZipSelect" @dragover.prevent @drop.prevent="handleZipDrop">
+            <div class="upload-icon">📦</div>
+            <div class="upload-text">拖拽 ZIP 文件到此处，或 <em>点击选择</em></div>
+            <div class="upload-hint">支持 .zip 格式，最大 5MB</div>
+          </div>
+          <input ref="zipInput" type="file" accept=".zip" style="display:none" @change="handleZipSelect" />
+          <div v-if="editZipFile" class="file-info-bar">
+            📎 {{ editZipFile.name }} ({{ formatFileSize(editZipFile.size) }})
+            <el-button text size="small" @click="editZipFile = null" style="margin-left: 8px; color: var(--text-secondary);">✕</el-button>
           </div>
         </div>
       </section>
@@ -541,59 +526,69 @@
           <span class="step-title">描述修改需求</span>
         </div>
         <div class="step-body">
-          <div class="editcode-form">
-            <el-input
-              v-model="editCodeDescription"
-              type="textarea"
-              :autosize="{ minRows: 3, maxRows: 8 }"
-              placeholder="描述你想要的修改，例如：把这段代码改成异步的、添加错误处理、优化性能..."
-              class="editcode-editor"
-            />
+          <el-input v-model="editCodeDescription" type="textarea" :rows="3" placeholder="描述你想要修改的内容，例如：给项目添加登录功能、优化页面性能、修复XX页面的bug、把前端改成响应式布局..." size="large" />
+        </div>
+      </section>
+
+      <!-- Step 3: AI modify -->
+      <section class="step-section">
+        <div class="step-header">
+          <span class="step-num edit-num">3</span>
+          <span class="step-title">AI 修改项目</span>
+        </div>
+        <div class="step-body">
+          <div class="editcode-actions">
+            <el-button type="primary" size="large" :loading="editCodeLoading" @click="aiModifyProject" :disabled="!editZipFile || !editCodeDescription.trim()">
+              🤖 AI 修改项目
+            </el-button>
+            <span v-if="!paymentStatus.paid" class="pay-hint" @click="showPaymentDialog">
+              <el-icon><Lock /></el-icon> 需要开通会员
+            </span>
+            <el-button v-if="editModifyResult.length > 0" size="large" @click="editModifyResult = []; editCodeSelectedFile = -1; editZipFile = null; editCodeDescription = ''">
+              ✕ 清空
+            </el-button>
           </div>
         </div>
       </section>
 
-      <!-- Step 3: Execute and results -->
-      <section class="step-section">
+      <!-- Results -->
+      <section v-if="editModifyResult.length > 0" class="step-section fade-in">
         <div class="step-header">
-          <span class="step-num edit-num">3</span>
-          <span class="step-title">AI 修改</span>
+          <span class="step-num edit-num">4</span>
+          <span class="step-title">修改结果</span>
+          <span class="selected-count">共 {{ editModifyResult.length }} 个文件被修改</span>
         </div>
         <div class="step-body">
-          <div class="editcode-actions">
-            <el-button type="primary" size="large" :loading="editCodeLoading" @click="aiModifyCode" :disabled="!editFileContent || !editCodeDescription">
-              🤖 AI 修改代码
-            </el-button>
-            <span v-if="!paymentStatus.paid" class="pay-hint">
-              <el-icon><Lock /></el-icon> 需要开通会员
-            </span>
-            <el-button v-if="editCodeResult" size="large" @click="editCodeResult = ''; editFileContent = ''; editCodeDescription = ''">
-              ✕ 清空
-            </el-button>
+          <div class="gen-file-list">
+            <div v-for="(file, idx) in editModifyResult" :key="idx" class="gen-file-item" :class="{ active: editCodeSelectedFile === idx }" @click="editCodeSelectedFile = idx">
+              <span class="gen-file-icon">📄</span>
+              <span class="gen-file-name">{{ file.filename }}</span>
+            </div>
           </div>
-
-          <!-- Diff result -->
-          <div v-if="editCodeResult" class="repair-results fade-in">
-            <h4>📝 修改对比</h4>
-            <div class="repair-item">
-              <div class="repair-file-header">
-                <span class="repair-filename">代码修改结果</span>
-                <el-button type="success" size="small" @click="copyModifiedCode">
-                  📋 复制修改后代码
-                </el-button>
-              </div>
-              <div class="diff-container">
-                <div class="diff-side">
-                  <div class="diff-label">原始代码</div>
-                  <pre class="diff-code original"><code>{{ editFileContent }}</code></pre>
-                </div>
-                <div class="diff-divider"></div>
-                <div class="diff-side">
-                  <div class="diff-label">修改后代码</div>
-                  <pre class="diff-code fixed"><code>{{ editCodeResult }}</code></pre>
-                </div>
+          <div v-if="editCodeSelectedFile >= 0 && editModifyResult[editCodeSelectedFile]" class="terminal-container">
+            <div class="terminal-header">
+              <div class="terminal-dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+              <span class="terminal-title">{{ editModifyResult[editCodeSelectedFile].filename }}</span>
+              <div class="terminal-actions">
+                <el-button text size="small" @click="copyCurrentModified">📋 复制修改后代码</el-button>
               </div>
             </div>
+            <div class="diff-container">
+              <div class="diff-side">
+                <div class="diff-label">原始代码</div>
+                <pre class="diff-code original"><code>{{ editModifyResult[editCodeSelectedFile].original }}</code></pre>
+              </div>
+              <div class="diff-divider"></div>
+              <div class="diff-side">
+                <div class="diff-label">修改后</div>
+                <pre class="diff-code fixed"><code>{{ editModifyResult[editCodeSelectedFile].modified }}</code></pre>
+              </div>
+            </div>
+          </div>
+          <div class="gen-actions">
+            <el-button type="success" size="large" @click="downloadModifiedZip">
+              📥 下载修改后的 ZIP
+            </el-button>
           </div>
         </div>
       </section>
@@ -1066,14 +1061,15 @@ export default {
       userProfile: {},
       userProfileLoaded: false,
       // Edit Code tab (AI Code Modifier)
-      editFileContent: '',
-      editCodeDescription: '',
-      editCodeResult: '',
-      editCodeLoading: false,
       // Admin
       isAdmin: false,
       adminSubTab: 'dashboard',
       logoClickCount: 0,
+      editZipFile: null,
+      editCodeDescription: '',
+      editModifyResult: [],
+      editCodeSelectedFile: -1,
+      editCodeLoading: false,
       adminLoginVisible: false,
       adminTokenInput: '',
       adminToken: '',
@@ -1688,6 +1684,89 @@ export default {
     },
 
     // ===== Code Fix =====
+    triggerZipSelect() {
+      this.$refs.zipInput.click()
+    },
+    handleZipSelect(e) {
+      const file = e.target.files[0]
+      if (file && file.name.endsWith('.zip')) {
+        if (file.size > 5 * 1024 * 1024) {
+          this.$message.warning('文件不能超过 5MB')
+          return
+        }
+        this.editZipFile = file
+      }
+    },
+    handleZipDrop(e) {
+      const file = e.dataTransfer.files[0]
+      if (file && file.name.endsWith('.zip')) {
+        if (file.size > 5 * 1024 * 1024) {
+          this.$message.warning('文件不能超过 5MB')
+          return
+        }
+        this.editZipFile = file
+      }
+    },
+    formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B'
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+    },
+    async aiModifyProject() {
+      if (!this.editZipFile) { this.$message.warning('请先上传项目源码'); return }
+      if (!this.editCodeDescription.trim()) { this.$message.warning('请描述修改需求'); return }
+      if (!(await this.requirePayment('modify-code'))) return
+
+      this.editCodeLoading = true
+      this.editModifyResult = []
+      this.editCodeSelectedFile = -1
+      try {
+        const formData = new FormData()
+        formData.append('file', this.editZipFile)
+        formData.append('description', this.editCodeDescription)
+        if (this.userId) formData.append('user_id', this.userId)
+
+        const res = await axios.post('/api/generate/modify-code', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        this.editModifyResult = res.data.files || []
+        if (this.editModifyResult.length > 0) {
+          this.editCodeSelectedFile = 0
+          this.$message.success(`修改完成，共 ${this.editModifyResult.length} 个文件`)
+        } else {
+          this.$message.info('AI 未检测到需要修改的内容')
+        }
+      } catch (err) {
+        if (err.response?.status === 402) {
+          this.showPaymentDialog()
+        } else {
+          this.$message.error(err.response?.data?.detail || '修改失败')
+        }
+      } finally {
+        this.editCodeLoading = false
+      }
+    },
+    copyCurrentModified() {
+      if (this.editCodeSelectedFile >= 0 && this.editModifyResult[this.editCodeSelectedFile]) {
+        navigator.clipboard.writeText(this.editModifyResult[this.editCodeSelectedFile].modified)
+        this.$message.success('已复制修改后代码')
+      }
+    },
+    async downloadModifiedZip() {
+      try {
+        const res = await axios.post('/api/generate/modify-code/download', {
+          files: this.editModifyResult
+        }, { responseType: 'blob' })
+        const url = URL.createObjectURL(res.data)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'modified-project.zip'
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch (err) {
+        this.$message.error('下载失败')
+      }
+    },
     async analyzeCode() {
       if (!this.fixProjectPath.trim()) { this.$message.warning('请输入项目路径'); return }
       this.analyzing = true
@@ -1762,29 +1841,80 @@ export default {
     },
 
     // ===== Edit Code Tab =====
-    async aiModifyCode() {
-      if (!(await this.requirePayment('modify-code'))) return
-      if (!this.editFileContent.trim()) { this.$message.warning('请粘贴原始代码'); return }
-      if (!this.editCodeDescription.trim()) { this.$message.warning('请输入修改需求'); return }
-
-      this.editCodeLoading = true
-      this.editCodeResult = ''
+    async analyzeCode() {
+      if (!this.fixProjectPath.trim()) { this.$message.warning('请输入项目路径'); return }
+      this.analyzing = true
+      this.analysisResult = null
+      this.selectedErrors = []
+      this.repairResults = []
       try {
-        const res = await axios.post('/api/generate/modify-code', {
-          code: this.editFileContent,
-          description: this.editCodeDescription,
-          user_id: this.userId,
-        })
-        this.editCodeResult = res.data.modified_code || ''
-        this.$message.success('代码修改完成')
+        const res = await axios.post('/api/fix/analyze', { path: this.fixProjectPath })
+        this.analysisResult = res.data
+        if (res.data.total > 0) { this.$message.warning(`发现 ${res.data.total} 个问题`) }
+        else { this.$message.success('未检测到问题') }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '分析失败')
+      } finally { this.analyzing = false }
+    },
+    toggleError(idx) {
+      const pos = this.selectedErrors.indexOf(idx)
+      if (pos === -1) this.selectedErrors.push(idx)
+      else this.selectedErrors.splice(pos, 1)
+    },
+    selectAllErrors() {
+      if (!this.analysisResult) return
+      this.selectedErrors = this.analysisResult.errors.map((_, i) => i)
+    },
+    async repairErrors() {
+      if (this.selectedErrors.length === 0) return
+      if (!(await this.requirePayment('fix'))) return
+      this.repairing = true
+      this.repairResults = []
+      try {
+        const errors = this.selectedErrors.map(idx => this.analysisResult.errors[idx])
+        const res = await axios.post('/api/fix/repair', { path: this.fixProjectPath, errors })
+        this.repairResults = res.data.results.map(r => ({ ...r, applied: false }))
+        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件`)
       } catch (err) {
         if (err.response?.status === 402) {
           this.showPaymentDialog()
         } else {
-          this.$message.error(err.response?.data?.detail || 'AI 修改失败，请重试')
+          this.$message.error(err.response?.data?.detail || '修复失败')
         }
-      } finally { this.editCodeLoading = false }
+      } finally { this.repairing = false }
     },
+    async applyFix(result) {
+      try {
+        await axios.post('/api/fix/apply', { path: this.fixProjectPath, fixes: [{ file: result.file, fixed: result.fixed }] })
+        result.applied = true
+        this.$message.success(`${result.file} 修复已应用`)
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '应用修复失败')
+      }
+    },
+    errorTypeLabel(type) {
+      return { syntax: '语法', import: '依赖', type: '类型', config: '配置', bracket: '括号' }[type] || type
+    },
+
+    // ===== User Profile =====
+    async loadUserProfile() {
+      if (!this.isLoggedIn) return
+      try {
+        const res = await axios.get('/api/auth/profile', {
+          headers: { 'x-user-id': this.userId },
+        })
+        this.userProfile = res.data
+        this.userProfileLoaded = true
+      } catch { /* ignore */ }
+    },
+    formatFullTime(t) {
+      if (!t) return '-'
+      try {
+        return new Date(t).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+      } catch { return t }
+    },
+
+    // ===== Edit Code Tab =====
     copyModifiedCode() {
       if (this.editCodeResult) {
         navigator.clipboard.writeText(this.editCodeResult)
@@ -1818,7 +1948,7 @@ export default {
 .admin-tab.active { background: rgba(210, 153, 34, 0.15); color: var(--accent-orange); }
 
 /* Main */
-.main-content { flex: 1; padding: 24px 0; display: flex; flex-direction: column; gap: 20px; max-width: 1200px; width: 100%; margin: 0 auto; }
+.main-content { flex: 1; padding: 24px 0; display: flex; flex-direction: column; gap: 20px; }
 
 /* Step Section */
 .step-section { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
@@ -2056,6 +2186,14 @@ export default {
 /* ===== Edit Code Tab ===== */
 .step-num.edit-num { background: #8b5cf6; color: #fff; }
 .editcode-tips { padding: 20px; }
+.upload-zone { border: 2px dashed var(--border-color); border-radius: 12px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.3s; background: var(--bg-primary); }
+.upload-zone:hover { border-color: var(--accent-purple); background: rgba(188, 140, 255, 0.03); }
+.upload-icon { font-size: 48px; margin-bottom: 12px; }
+.upload-text { font-size: 14px; color: var(--text-primary); margin-bottom: 8px; }
+.upload-text em { color: var(--accent-blue); font-style: normal; }
+.upload-hint { font-size: 12px; color: var(--text-secondary); }
+.file-info-bar { margin-top: 12px; font-size: 13px; color: var(--accent-blue); padding: 8px 14px; background: var(--bg-tertiary); border-radius: 8px; display: flex; align-items: center; }
+.editcode-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; margin-top: 8px; }
 .editcode-tips-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
 .editcode-tips-list { list-style: none; padding: 0; margin: 0 0 12px 0; display: flex; flex-direction: column; gap: 6px; }
 .editcode-tips-list li { font-size: 13px; color: var(--text-secondary); padding-left: 20px; position: relative; line-height: 1.6; }
