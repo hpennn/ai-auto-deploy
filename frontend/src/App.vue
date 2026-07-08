@@ -79,6 +79,9 @@
           <el-tag v-if="!isLoggedIn" type="info" effect="plain" round class="vip-tag" @click="showPaymentDialog">
             开通会员
           </el-tag>
+          <button v-if="showInstallBtn" @click="installPWA" class="pwa-install-btn">
+            添加到桌面
+          </button>
         </div>
       </div>
     </header>
@@ -953,6 +956,9 @@ export default {
   data() {
     return {
       activeTab: 'deploy',
+      // PWA
+      showInstallBtn: false,
+      deferredPrompt: null,
       // User & Payment
       userId: localStorage.getItem('user_id') || 'user_' + Math.random().toString(36).slice(2, 10),
       paymentStatus: { paid: false, paid_type: 'free' },
@@ -1139,8 +1145,29 @@ export default {
     if (this.isLoggedIn) {
       this.loadUserProfile()
     }
+
+    // PWA install prompt
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      this.showInstallBtn = false
+    } else {
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault()
+        this.deferredPrompt = e
+        this.showInstallBtn = true
+      })
+    }
   },
   methods: {
+    // ===== PWA =====
+    async installPWA() {
+      if (!this.deferredPrompt) return
+      this.deferredPrompt.prompt()
+      const { outcome } = await this.deferredPrompt.userChoice
+      if (outcome === 'accepted') {
+        this.showInstallBtn = false
+      }
+      this.deferredPrompt = null
+    },
     // ===== Admin =====
     async checkAdminStatus() {
       try {
@@ -1806,10 +1833,10 @@ export default {
 .admin-tab.active { background: rgba(210, 153, 34, 0.15); color: var(--accent-orange); }
 
 /* Main */
-.main-content { flex: 1; padding: 24px 0; display: flex; flex-direction: column; gap: 20px; }
+.main-content { flex: 1; padding: 24px 0; display: flex; flex-direction: column; gap: 20px; max-width: 1200px; width: 100%; margin: 0 auto; }
 
 /* Step Section */
-.step-section { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
+.step-section { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
 .step-header { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-tertiary); flex-wrap: wrap; }
 .step-num { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: var(--accent-green); color: #000; font-weight: 700; font-size: 13px; border-radius: 50%; }
 .step-num.fix-num { background: var(--accent-orange); }
@@ -1845,7 +1872,7 @@ export default {
 .connected-badge { margin-left: auto; }
 
 /* SSH Connected State */
-.ssh-connected { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(63, 185, 80, 0.08); border: 1px solid rgba(63, 185, 80, 0.2); border-radius: 8px; }
+.ssh-connected { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(63, 185, 80, 0.08); border: 1px solid rgba(63, 185, 80, 0.2); border-radius: 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); }
 .ssh-connected-info { display: flex; align-items: center; gap: 12px; }
 .ssh-connected-icon { font-size: 24px; }
 .ssh-connected-host { font-size: 15px; font-weight: 600; color: var(--accent-green); }
@@ -1858,7 +1885,7 @@ export default {
 .selected-count { font-size: 13px; color: var(--accent-purple); margin-left: auto; }
 
 /* Action Row */
-.action-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.action-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; margin-top: 8px; }
 
 /* Info Grid */
 .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
@@ -1875,7 +1902,7 @@ export default {
 .config-item label { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
 
 /* Terminal */
-.terminal-container { margin-top: 20px; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
+.terminal-container { margin-top: 20px; border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); }
 .terminal-header { display: flex; align-items: center; padding: 10px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border-color); gap: 12px; }
 .terminal-dots { display: flex; gap: 6px; }
 .dot { width: 12px; height: 12px; border-radius: 50%; }
@@ -1933,7 +1960,7 @@ export default {
 .error-right { flex-shrink: 0; }
 
 /* Fix Actions */
-.fix-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; }
+.fix-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; margin-top: 8px; align-items: center; }
 
 /* Repair Results / Diff */
 .repair-results { margin-top: 12px; }
@@ -1976,7 +2003,7 @@ export default {
 
 .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .stat-card { display: flex; align-items: center; gap: 16px; padding: 20px; background: var(--bg-tertiary); border-radius: 12px; border: 1px solid var(--border-color); transition: transform 0.2s; }
-.stat-card:hover { transform: translateY(-2px); }
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
 .stat-card.accent-orange { border-color: var(--accent-orange); }
 .stat-card.accent-blue { border-color: var(--accent-blue); }
 .stat-card.accent-green { border-color: var(--accent-green); }
@@ -2073,4 +2100,22 @@ export default {
   .payment-plans { flex-direction: column; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* PWA Install Button */
+.pwa-install-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--accent-blue);
+  border-radius: 14px;
+  background: rgba(88, 166, 255, 0.1);
+  color: var(--accent-blue);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.pwa-install-btn:hover {
+  background: rgba(88, 166, 255, 0.2);
+}
+
 </style>

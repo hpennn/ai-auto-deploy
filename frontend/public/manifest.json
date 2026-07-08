@@ -1,0 +1,11 @@
+{
+  "name": "AI项目自动部署",
+  "short_name": "AI部署",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    { "src": "/vite.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
