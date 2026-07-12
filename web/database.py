@@ -53,6 +53,25 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
+    # Migration: add credits column if not exists
+    cols = [row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "credits" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN credits INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+
+    # Create credit_logs table
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS credit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            type TEXT NOT NULL DEFAULT 'consume',
+            description TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+    """)
+    conn.commit()
+
     # Create deploy_logs table
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS deploy_logs (
@@ -78,6 +97,30 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
     """)
+    conn.commit()
+
+    # Auto-gift 30000 credits to old paid users (paid_type != 'free' and credits = 0)
+    conn.execute("""
+        UPDATE users SET credits = 30000
+        WHERE paid_type != 'free' AND credits = 0
+    """)
+    # Log the gift
+    from datetime import datetime
+    now = datetime.now().isoformat()
+    old_paid_users = conn.execute(
+        "SELECT user_id FROM users WHERE paid_type != 'free' AND credits = 30000"
+    ).fetchall()
+    for row in old_paid_users:
+        # Check if gift log already exists
+        existing = conn.execute(
+            "SELECT id FROM credit_logs WHERE user_id = ? AND type = 'gift' AND amount = 30000 AND description = '老用户过渡赠送'",
+            (row["user_id"],)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO credit_logs (user_id, amount, type, description, created_at) VALUES (?, ?, 'gift', '老用户过渡赠送', ?)",
+                (row["user_id"], 30000, now)
+            )
     conn.commit()
     conn.close()
 
@@ -165,20 +208,19 @@ def register_user(user_id: str) -> dict:
 
 
 def is_paid(user_id: str) -> bool:
+    """检查用户是否有足够积分（兼容老逻辑）"""
     user = get_user(user_id)
     if not user:
         return False
+    # 优先检查积分
+    credits = user.get("credits", 0)
+    if credits > 0:
+        return True
+    # 兼容老的订阅制
     pt = user["paid_type"]
     if pt == "permanent":
         return True
-    if pt == "yearly" and user.get("expires_at"):
-        from datetime import datetime
-        try:
-            exp = datetime.fromisoformat(user["expires_at"])
-            return exp.timestamp() > time.time()
-        except Exception:
-            return False
-    if pt == "monthly" and user.get("expires_at"):
+    if pt in ("yearly", "monthly") and user.get("expires_at"):
         from datetime import datetime
         try:
             exp = datetime.fromisoformat(user["expires_at"])
@@ -186,6 +228,73 @@ def is_paid(user_id: str) -> bool:
         except Exception:
             return False
     return False
+
+
+def get_user_credits(user_id: str) -> int:
+    """获取用户积分余额"""
+    user = get_user(user_id)
+    if not user:
+        return 0
+    return user.get("credits", 0)
+
+
+def deduct_credits(user_id: str, amount: int, description: str = "") -> bool:
+    """扣除积分，成功返回True，余额不足返回False"""
+    conn = get_conn()
+    from datetime import datetime
+    user = conn.execute("SELECT credits FROM users WHERE user_id = ?", (user_id,)).fetchone()
+    if not user or user["credits"] < amount:
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE users SET credits = credits - ? WHERE user_id = ?",
+        (amount, user_id),
+    )
+    conn.execute(
+        "INSERT INTO credit_logs (user_id, amount, type, description, created_at) VALUES (?, ?, 'consume', ?, ?)",
+        (user_id, -amount, description, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def add_credits(user_id: str, amount: int, credit_type: str = "recharge", description: str = "") -> bool:
+    """增加积分"""
+    conn = get_conn()
+    from datetime import datetime
+    user = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+    if not user:
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE users SET credits = credits + ? WHERE user_id = ?",
+        (amount, user_id),
+    )
+    conn.execute(
+        "INSERT INTO credit_logs (user_id, amount, type, description, created_at) VALUES (?, ?, ?, ?, ?)",
+        (user_id, amount, credit_type, description, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_credit_logs(user_id: str = None, limit: int = 100) -> list:
+    """获取积分流水"""
+    conn = get_conn()
+    if user_id:
+        rows = conn.execute(
+            "SELECT * FROM credit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM credit_logs ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def is_admin(user_id: str) -> bool:
@@ -252,7 +361,7 @@ def get_admin_stats() -> dict:
     from datetime import datetime
 
     total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    paid_users = conn.execute("SELECT COUNT(*) FROM users WHERE paid_type != 'free'").fetchone()[0]
+    paid_users = conn.execute("SELECT COUNT(*) FROM users WHERE credits > 0 OR paid_type != 'free'").fetchone()[0]
 
     now = datetime.now()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -268,6 +377,14 @@ def get_admin_stats() -> dict:
     total_orders = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
     paid_orders = conn.execute("SELECT COUNT(*) FROM orders WHERE status = 'paid'").fetchone()[0]
 
+    # Credit stats
+    total_credits_recharged = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_logs WHERE type = 'recharge'"
+    ).fetchone()[0]
+    total_credits_consumed = conn.execute(
+        "SELECT COALESCE(SUM(ABS(amount)), 0) FROM credit_logs WHERE type = 'consume'"
+    ).fetchone()[0]
+
     conn.close()
     return {
         "total_users": total_users,
@@ -277,6 +394,8 @@ def get_admin_stats() -> dict:
         "total_income": total_income,
         "total_orders": total_orders,
         "paid_orders": paid_orders,
+        "total_credits_recharged": total_credits_recharged,
+        "total_credits_consumed": total_credits_consumed,
     }
 
 

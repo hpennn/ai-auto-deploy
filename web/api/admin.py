@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from web.database import (
     get_all_users, get_all_orders, get_admin_stats,
     update_user_paid, get_deploy_logs, is_admin, set_admin, get_user,
+    get_credit_logs, add_credits, get_user_credits,
 )
 
 router = APIRouter()
@@ -49,6 +50,12 @@ class UpdateUserRequest(BaseModel):
 class SetAdminRequest(BaseModel):
     user_id: str
     is_admin: bool
+
+
+class AddCreditsRequest(BaseModel):
+    user_id: str
+    amount: int
+    description: Optional[str] = "管理员手动充值"
 
 
 # ============ Routes ============
@@ -122,3 +129,36 @@ async def verify_admin(request: Request):
     if (token and token == expected) or (user_id and is_admin(user_id)):
         return {"is_admin": True, "user_id": user_id}
     return {"is_admin": False, "user_id": user_id}
+
+
+@router.get("/credit-logs")
+async def credit_logs_endpoint(request: Request, user_id: Optional[str] = None, limit: int = 200):
+    """获取积分流水记录"""
+    _verify_admin(request)
+    logs = get_credit_logs(user_id=user_id, limit=limit)
+    return {"logs": logs, "total": len(logs)}
+
+
+@router.post("/add-credits")
+async def admin_add_credits(request: Request, req: AddCreditsRequest):
+    """管理员手动给用户加积分"""
+    _verify_admin(request)
+
+    user = get_user(req.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="积分数量必须大于0")
+
+    success = add_credits(req.user_id, req.amount, "gift", req.description or "管理员手动充值")
+    if not success:
+        raise HTTPException(status_code=500, detail="积分添加失败")
+
+    new_balance = get_user_credits(req.user_id)
+    return {
+        "message": f"成功为用户添加 {req.amount} 积分",
+        "user_id": req.user_id,
+        "added": req.amount,
+        "new_balance": new_balance,
+    }

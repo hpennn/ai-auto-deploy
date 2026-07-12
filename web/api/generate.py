@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from web.database import is_paid
+from web.database import is_paid, get_user_credits, deduct_credits
 
 router = APIRouter()
 
@@ -23,6 +23,10 @@ router = APIRouter()
 ARK_API_KEY = "ark-4f063f47-ee3d-45a2-a6db-677cc71cf784-041e9"
 DOUBAO_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3"
 DOUBAO_MODEL_ID = "ep-20260707225043-z7nkm"
+
+# 积分消耗配置
+CREDIT_COST_GENERATE = 500
+CREDIT_COST_MODIFY = 300
 
 # 技术栈模板
 TECH_STACKS = {
@@ -165,9 +169,14 @@ def build_prompt(description: str, project_type: str, tech_stack: str) -> str:
 @router.post("/project")
 async def generate_project(req: GenerateProjectRequest):
     """AI 生成项目"""
-    # Check payment
-    if req.user_id and not is_paid(req.user_id):
-        raise HTTPException(status_code=402, detail="该功能需要付费使用")
+    # Check credits
+    if req.user_id:
+        credits = get_user_credits(req.user_id)
+        if credits < CREDIT_COST_GENERATE:
+            raise HTTPException(
+                status_code=402,
+                detail=f"积分不足，生成项目需要 {CREDIT_COST_GENERATE} 积分，当前余额 {credits} 积分，请充值",
+            )
 
     if not req.description.strip():
         raise HTTPException(status_code=400, detail="请输入项目描述")
@@ -202,12 +211,18 @@ async def generate_project(req: GenerateProjectRequest):
     if not files:
         raise HTTPException(status_code=500, detail="AI 生成结果为空，请重试")
 
+    # Deduct credits after success
+    if req.user_id:
+        deduct_credits(req.user_id, CREDIT_COST_GENERATE, "生成项目")
+
     return {
         "files": files,
         "total": len(files),
         "description": req.description,
         "project_type": req.project_type,
         "tech_stack": req.tech_stack,
+        "credits_cost": CREDIT_COST_GENERATE,
+        "credits_remaining": get_user_credits(req.user_id) if req.user_id else None,
     }
 
 
@@ -225,8 +240,14 @@ async def modify_code(
     user_id: str = Form(default=""),
 ):
     """AI 修改整个项目源码包"""
-    if user_id and not is_paid(user_id):
-        raise HTTPException(status_code=402, detail="该功能需要付费使用")
+    # Check credits
+    if user_id:
+        credits = get_user_credits(user_id)
+        if credits < CREDIT_COST_MODIFY:
+            raise HTTPException(
+                status_code=402,
+                detail=f"积分不足，修改代码需要 {CREDIT_COST_MODIFY} 积分，当前余额 {credits} 积分，请充值",
+            )
 
     contents = await file.read()
     if len(contents) > 5 * 1024 * 1024:
@@ -330,7 +351,15 @@ async def modify_code(
                 "modified": mf.get("content", ""),
             })
 
-        return {"files": response_files}
+        # Deduct credits after success
+        if user_id:
+            deduct_credits(user_id, CREDIT_COST_MODIFY, "修改代码")
+
+        return {
+            "files": response_files,
+            "credits_cost": CREDIT_COST_MODIFY,
+            "credits_remaining": get_user_credits(user_id) if user_id else None,
+        }
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

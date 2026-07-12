@@ -78,7 +78,7 @@ async def login(req: LoginRequest):
     }
 
 from fastapi import Request
-from web.database import get_user
+from web.database import get_user, get_user_credits
 
 
 @router.get("/profile")
@@ -109,6 +109,7 @@ async def get_profile(request: Request):
         "user_id": user.get("user_id"),
         "username": username,
         "paid_type": user.get("paid_type", "free"),
+        "credits": user.get("credits", 0),
         "paid_at": user.get("paid_at"),
         "expires_at": user.get("expires_at"),
         "created_at": user.get("created_at", ""),

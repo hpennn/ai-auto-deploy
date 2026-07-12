@@ -15,6 +15,8 @@ import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from web.database import get_user_credits, deduct_credits
+
 router = APIRouter()
 
 # 豆包 AI 配置
@@ -22,11 +24,15 @@ ARK_API_KEY = "ark-4f063f47-ee3d-45a2-a6db-677cc71cf784-041e9"
 DOUBAO_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3"
 DOUBAO_MODEL_ID = "ep-20260707225043-z7nkm"
 
+# 积分消耗配置
+CREDIT_COST_FIX = 200
+
 
 # ============ Models ============
 
 class AnalyzeRequest(BaseModel):
     path: str
+    user_id: Optional[str] = None
 
 
 class RepairError(BaseModel):
@@ -40,6 +46,7 @@ class RepairError(BaseModel):
 class RepairRequest(BaseModel):
     path: str
     errors: list[RepairError]
+    user_id: Optional[str] = None
 
 
 class RepairResult(BaseModel):
@@ -607,7 +614,7 @@ def generate_fix(project_path: str, error: dict) -> dict:
 
 @router.post("/analyze")
 async def analyze_code(req: AnalyzeRequest):
-    """分析项目代码错误"""
+    """分析项目代码错误（检测本身免费，AI修复才收费）"""
     project_path = req.path.strip()
     
     if not os.path.isdir(project_path):
@@ -620,7 +627,8 @@ async def analyze_code(req: AnalyzeRequest):
             "total": len(errors),
             "error_count": sum(1 for e in errors if e['severity'] == 'error'),
             "warning_count": sum(1 for e in errors if e['severity'] == 'warning'),
-            "path": project_path
+            "path": project_path,
+            "fix_credit_cost": CREDIT_COST_FIX,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
@@ -628,7 +636,7 @@ async def analyze_code(req: AnalyzeRequest):
 
 @router.post("/repair")
 async def repair_code(req: RepairRequest):
-    """自动修复代码错误"""
+    """自动修复代码错误（消耗积分）"""
     project_path = req.path.strip()
     
     if not os.path.isdir(project_path):
@@ -636,6 +644,15 @@ async def repair_code(req: RepairRequest):
     
     if not req.errors:
         raise HTTPException(status_code=400, detail="没有需要修复的错误")
+
+    # Check credits before repair
+    if req.user_id:
+        credits = get_user_credits(req.user_id)
+        if credits < CREDIT_COST_FIX:
+            raise HTTPException(
+                status_code=402,
+                detail=f"积分不足，代码修复需要 {CREDIT_COST_FIX} 积分，当前余额 {credits} 积分，请充值",
+            )
     
     results = []
     for error in req.errors:
@@ -652,7 +669,15 @@ async def repair_code(req: RepairRequest):
                 "diff": f"修复失败: {str(e)}"
             })
     
-    return {"results": results}
+    # Deduct credits after success
+    if req.user_id and results:
+        deduct_credits(req.user_id, CREDIT_COST_FIX, "代码检测+修复")
+    
+    return {
+        "results": results,
+        "credits_cost": CREDIT_COST_FIX,
+        "credits_remaining": get_user_credits(req.user_id) if req.user_id else None,
+    }
 
 
 @router.post("/apply")

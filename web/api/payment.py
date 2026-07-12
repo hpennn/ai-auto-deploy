@@ -1,11 +1,11 @@
 """
-Payment API routes - 虎皮椒支付集成
+Payment API routes - 虎皮椒支付集成（积分包购买制）
 """
 
 import time
 import hashlib
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from web.database import (
     create_order, update_order_status, get_order,
-    get_user, upsert_user, is_paid,
+    get_user, upsert_user, add_credits, get_user_credits,
 )
 
 router = APIRouter()
@@ -24,20 +24,41 @@ XUNHU_APPID = "201906182239"
 XUNHU_APPSECRET = "a03834403fd0101fb1c622545967b3db"
 XUNHU_API = "https://api.xunhupay.com"
 
-# 价格配置：月付 99 元，年付 666 元
-PRICES = {
-    "monthly": 99.0,
-    "yearly": 666.0,
+# 积分包套餐配置
+CREDIT_PACKAGES = {
+    "starter": {
+        "price": 9.9,
+        "credits": 30000,
+        "label": "体验包",
+        "desc": "30,000 积分，约60次生成项目",
+    },
+    "basic": {
+        "price": 29,
+        "credits": 90000,
+        "label": "基础包",
+        "desc": "90,000 积分，约180次生成项目",
+    },
+    "pro": {
+        "price": 99,
+        "credits": 300000,
+        "label": "进阶包",
+        "desc": "300,000 积分，约600次生成项目",
+    },
+    "ultimate": {
+        "price": 299,
+        "credits": 900000,
+        "label": "旗舰包",
+        "desc": "900,000 积分，约1800次生成项目",
+    },
 }
 
-PLAN_LABELS = {
-    "monthly": "月度会员",
-    "yearly": "年度会员",
-}
-
-PLAN_DAYS = {
-    "monthly": 30,
-    "yearly": 365,
+# 每次操作消耗积分配置
+CREDIT_COSTS = {
+    "generate_project": 500,
+    "modify_code": 300,
+    "fix_code": 200,
+    "deploy_script": 0,
+    "remote_deploy": 0,
 }
 
 
@@ -45,13 +66,13 @@ PLAN_DAYS = {
 
 class CreatePaymentRequest(BaseModel):
     user_id: str
-    plan: str  # "monthly" | "yearly"
+    package: str  # "starter" | "basic" | "pro" | "ultimate"
 
 
 class CheckPaymentResponse(BaseModel):
     order_id: str
     status: str  # "pending" | "paid"
-    paid_type: Optional[str] = None
+    package: Optional[str] = None
 
 
 # ============ Helpers ============
@@ -86,18 +107,16 @@ def _verify_notify_hash(params: dict) -> bool:
 
 @router.post("/create")
 async def create_payment(req: CreatePaymentRequest):
-    """创建支付订单"""
-    if req.plan not in PRICES:
+    """创建积分包购买订单"""
+    if req.package not in CREDIT_PACKAGES:
         raise HTTPException(status_code=400, detail="无效的套餐类型")
 
-    if is_paid(req.user_id):
-        return {"message": "用户已付费", "already_paid": True}
-
+    pkg = CREDIT_PACKAGES[req.package]
     order_id = _generate_order_id()
-    amount = PRICES[req.plan]
-    plan_label = PLAN_LABELS[req.plan]
+    amount = pkg["price"]
+    label = pkg["label"]
 
-    create_order(order_id, req.user_id, amount, req.plan)
+    create_order(order_id, req.user_id, amount, req.package)
 
     nonce = str(int(time.time()))
     pay_params = {
@@ -105,8 +124,8 @@ async def create_payment(req: CreatePaymentRequest):
         "appid": XUNHU_APPID,
         "trade_order_id": order_id,
         "total_fee": str(amount),
-        "title": f"AI Auto Deploy - {plan_label}",
-        "body": f"AI Auto Deploy {plan_label}，享生成项目与代码修复功能",
+        "title": f"AI Auto Deploy - {label}",
+        "body": f"AI Auto Deploy {label}，获得 {pkg['credits']:,} 积分",
         "notify_url": "/api/payment/notify",
         "nonce_str": nonce,
         "time": nonce,
@@ -126,9 +145,9 @@ async def create_payment(req: CreatePaymentRequest):
         return {
             "order_id": order_id,
             "amount": amount,
-            "plan": req.plan,
+            "package": req.package,
+            "credits": pkg["credits"],
             "pay_url": data.get("url", ""),
-            "already_paid": False,
         }
     except HTTPException:
         raise
@@ -138,7 +157,7 @@ async def create_payment(req: CreatePaymentRequest):
 
 @router.post("/notify")
 async def payment_notify(request: Request):
-    """虎皮椒支付回调"""
+    """虎皮椒支付回调 - 支付成功后加积分"""
     form = await request.form()
     params = dict(form)
 
@@ -150,15 +169,18 @@ async def payment_notify(request: Request):
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
 
+    # 更新订单状态
     update_order_status(order_id, "paid")
 
+    # 给用户加积分
     user_id = order["user_id"]
-    paid_type = order["paid_type"]
-    now = datetime.now()
+    package_id = order["paid_type"]  # 订单的 paid_type 存的是 package id
+    pkg = CREDIT_PACKAGES.get(package_id)
 
-    days = PLAN_DAYS.get(paid_type, 30)
-    expires = now + timedelta(days=days)
-    upsert_user(user_id, paid_type, now.isoformat(), expires.isoformat())
+    if pkg:
+        credits_amount = pkg["credits"]
+        label = pkg["label"]
+        add_credits(user_id, credits_amount, "recharge", f"购买{label}")
 
     return {"errcode": 0, "errmsg": "success"}
 
@@ -173,36 +195,32 @@ async def check_payment(order_id: str):
     return {
         "order_id": order_id,
         "status": order["status"],
-        "paid_type": order.get("paid_type"),
+        "package": order.get("paid_type"),
         "amount": order["amount"],
     }
 
 
 @router.get("/user/{user_id}")
 async def get_user_payment(user_id: str):
-    """查询用户付费状态"""
+    """查询用户积分状态"""
     user = get_user(user_id)
-    paid = is_paid(user_id)
+    credits = get_user_credits(user_id)
 
     return {
         "user_id": user_id,
-        "paid": paid,
+        "credits": credits,
         "paid_type": user["paid_type"] if user else "free",
         "paid_at": user.get("paid_at") if user else None,
         "expires_at": user.get("expires_at") if user else None,
-        "prices": PRICES,
-        "plan_labels": PLAN_LABELS,
+        "packages": {k: {"price": v["price"], "credits": v["credits"], "label": v["label"]} for k, v in CREDIT_PACKAGES.items()},
+        "credit_costs": CREDIT_COSTS,
     }
 
 
-@router.get("/prices")
-async def get_prices():
-    """获取价格信息"""
+@router.get("/packages")
+async def get_packages():
+    """获取积分包套餐"""
     return {
-        "prices": PRICES,
-        "plan_labels": PLAN_LABELS,
-        "description": {
-            "monthly": "月度会员 - 有效期 30 天",
-            "yearly": "年度会员 - 有效期 365 天，省 522 元",
-        },
+        "packages": CREDIT_PACKAGES,
+        "credit_costs": CREDIT_COSTS,
     }

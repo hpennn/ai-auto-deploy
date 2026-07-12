@@ -33,8 +33,8 @@
                   <el-tag type="info" effect="plain" round size="small" class="user-tag-clickable">
                     👤 {{ loggedInUsername }}
                   </el-tag>
-                  <el-tag v-if="paymentStatus.paid" type="success" effect="plain" round size="small" class="vip-badge-small">
-                    👑
+                  <el-tag v-if="userCredits > 0" type="warning" effect="plain" round size="small" class="credits-badge-small">
+                    💎 {{ formatCredits(userCredits) }}
                   </el-tag>
                 </div>
               </template>
@@ -45,16 +45,12 @@
                 </div>
                 <div class="profile-info">
                   <div class="profile-row">
-                    <span class="profile-label">订阅状态</span>
-                    <el-tag :type="profilePaidTypeTag" size="small" effect="dark">{{ profilePaidLabel }}</el-tag>
+                    <span class="profile-label">积分余额</span>
+                    <span class="profile-value" style="color: var(--accent-orange); font-weight: 700;">💎 {{ formatCredits(userCredits) }}</span>
                   </div>
-                  <div class="profile-row" v-if="userProfile.paid_type && userProfile.paid_type !== 'free'">
-                    <span class="profile-label">剩余时长</span>
-                    <span class="profile-value" :class="{ 'text-expired': profileDaysLeft <= 0 }">{{ profileRemainingText }}</span>
-                  </div>
-                  <div class="profile-row" v-if="userProfile.expires_at">
-                    <span class="profile-label">到期时间</span>
-                    <span class="profile-value">{{ formatFullTime(userProfile.expires_at) }}</span>
+                  <div class="profile-row">
+                    <span class="profile-label">账户状态</span>
+                    <el-tag :type="userCredits > 0 ? 'success' : 'info'" size="small" effect="dark">{{ userCredits > 0 ? '有积分' : '无积分' }}</el-tag>
                   </div>
                   <div class="profile-row">
                     <span class="profile-label">注册时间</span>
@@ -66,18 +62,15 @@
                   </div>
                 </div>
                 <div class="profile-actions">
-                  <el-button v-if="!paymentStatus.paid" type="primary" size="small" @click="showPaymentDialog" style="width: 100%;">开通会员</el-button>
+                  <el-button type="primary" size="small" @click="showPaymentDialog" style="width: 100%;">💎 充值积分</el-button>
                   <el-button type="danger" size="small" plain @click="handleLogout" style="width: 100%;">退出登录</el-button>
                 </div>
               </div>
             </el-popover>
           </template>
           <el-button v-else text size="small" type="primary" @click="loginMode = 'login'; loginDialogVisible = true">登录</el-button>
-          <el-tag v-if="paymentStatus.paid && !isLoggedIn" type="success" effect="plain" round>
-            👑 {{ planLabel }}
-          </el-tag>
-          <el-tag v-if="!isLoggedIn" type="info" effect="plain" round class="vip-tag" @click="showPaymentDialog">
-            开通会员
+          <el-tag v-if="!isLoggedIn" type="warning" effect="plain" round class="vip-tag" @click="showPaymentDialog">
+            💎 充值积分
           </el-tag>
           <button v-if="showInstallBtn" @click="installPWA" class="pwa-install-btn">
             添加到桌面
@@ -358,9 +351,7 @@
             <el-icon v-if="!genLoading"><MagicStick /></el-icon>
             AI 生成项目
           </el-button>
-          <span v-if="!paymentStatus.paid" class="pay-hint">
-            <el-icon><Lock /></el-icon> 需要开通会员
-          </span>
+          <span class="credit-cost-hint">💎 消耗 500 积分</span>
         </div>
       </section>
 
@@ -465,9 +456,7 @@
               <el-icon v-if="!repairing"><Magic /></el-icon>
               AI 自动修复
             </el-button>
-            <span v-if="!paymentStatus.paid" class="pay-hint">
-              <el-icon><Lock /></el-icon> 需要开通会员
-            </span>
+            <span class="credit-cost-hint">💎 消耗 200 积分</span>
             <el-button size="large" @click="selectAllErrors">全选</el-button>
             <el-button size="large" @click="selectedErrors = []">清空</el-button>
           </div>
@@ -802,7 +791,58 @@
         </div>
       </section>
 
-      <!-- System Config -->
+      <!-- Credit Logs -->
+      <section v-if="adminSubTab === 'credits'" class="step-section fade-in">
+        <div class="step-header">
+          <span class="step-num admin-num">💎</span>
+          <span class="step-title">积分流水</span>
+        </div>
+        <div class="step-body">
+          <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+            <el-input v-model="adminCreditUserId" placeholder="输入用户ID筛选" size="default" clearable style="width: 280px;" />
+            <el-button size="default" @click="loadCreditLogs">查询</el-button>
+            <el-divider direction="vertical" />
+            <el-input v-model="adminAddCreditUserId" placeholder="用户ID" size="default" style="width: 200px;" />
+            <el-input-number v-model="adminAddCreditAmount" :min="1" :step="1000" size="default" style="width: 140px;" />
+            <el-input v-model="adminAddCreditDesc" placeholder="备注" size="default" style="width: 140px;" />
+            <el-button type="warning" size="default" @click="adminAddCredits" :loading="adminAddCreditLoading">手动加积分</el-button>
+          </div>
+          <div v-if="creditLogs.length === 0" class="empty-state">
+            <span>💎</span>
+            <p>暂无积分流水</p>
+          </div>
+          <div v-else class="admin-table-wrapper">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>用户</th>
+                  <th>变动</th>
+                  <th>类型</th>
+                  <th>说明</th>
+                  <th>时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="log in creditLogs" :key="log.id">
+                  <td class="user-id-cell">{{ log.user_id }}</td>
+                  <td :style="{ color: log.amount > 0 ? '#3fb950' : '#f85149', fontWeight: 600 }">
+                    {{ log.amount > 0 ? '+' : '' }}{{ log.amount.toLocaleString() }}
+                  </td>
+                  <td>
+                    <el-tag :type="{'recharge': 'success', 'consume': 'warning', 'gift': 'info'}[log.type]" size="small" effect="dark">
+                      {{ {'recharge': '充值', 'consume': '消费', 'gift': '赠送'}[log.type] || log.type }}
+                    </el-tag>
+                  </td>
+                  <td class="msg-cell">{{ log.description || '-' }}</td>
+                  <td class="time-cell">{{ formatTime(log.created_at) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+<!-- System Config -->
       <section v-if="adminSubTab === 'config'" class="step-section fade-in">
         <div class="step-header">
           <span class="step-num admin-num">⚙️</span>
@@ -810,18 +850,19 @@
         </div>
         <div class="step-body">
           <div class="config-section">
-            <h4>🏷️ 价格配置</h4>
-            <div class="config-form">
-              <div class="config-form-item">
-                <label>月度会员价格 (¥)</label>
-                <el-input v-model.number="configPrices.monthly" type="number" size="default" style="width: 120px;" />
-              </div>
-              <div class="config-form-item">
-                <label>年度会员价格 (¥)</label>
-                <el-input v-model.number="configPrices.yearly" type="number" size="default" style="width: 120px;" />
-              </div>
+            <h4>💎 积分套餐配置</h4>
+            <div class="info-grid" style="margin-top: 12px;">
+              <div class="info-item"><span class="info-label">体验包</span><span class="info-value">¥9.9 → 30,000 积分</span></div>
+              <div class="info-item"><span class="info-label">基础包</span><span class="info-value">¥29 → 90,000 积分</span></div>
+              <div class="info-item"><span class="info-label">进阶包</span><span class="info-value">¥99 → 300,000 积分</span></div>
+              <div class="info-item"><span class="info-label">旗舰包</span><span class="info-value">¥299 → 900,000 积分</span></div>
             </div>
-            <p class="config-hint">⚠️ 当前价格配置为前端展示，修改后需重新部署生效</p>
+            <div class="info-grid" style="margin-top: 12px;">
+              <div class="info-item"><span class="info-label">生成项目</span><span class="info-value">500 积分/次</span></div>
+              <div class="info-item"><span class="info-label">修改代码</span><span class="info-value">300 积分/次</span></div>
+              <div class="info-item"><span class="info-label">代码检测+修复</span><span class="info-value">200 积分/次</span></div>
+              <div class="info-item"><span class="info-label">部署</span><span class="info-value">免费</span></div>
+            </div>
           </div>
           <div class="config-section">
             <h4>🔑 管理员 Token</h4>
@@ -847,33 +888,36 @@
     </main>
 
     <!-- ============ 付费弹窗 ============ -->
-    <el-dialog v-model="paymentDialogVisible" title="开通会员" width="520px" :close-on-click-modal="false" class="payment-dialog">
+    <el-dialog v-model="paymentDialogVisible" title="💎 充值积分" width="640px" :close-on-click-modal="false" class="payment-dialog">
       <div class="payment-content">
-        <div class="payment-plans">
-          <div v-for="plan in planOptions" :key="plan.key" class="plan-card" :class="{ selected: selectedPlan === plan.key, recommend: plan.recommend }" @click="selectedPlan = plan.key">
-            <div v-if="plan.recommend" class="plan-badge">推荐</div>
-            <div class="plan-name">{{ plan.label }}</div>
+        <div style="text-align: center; margin-bottom: 16px; color: var(--text-secondary); font-size: 14px;">
+          当前余额：<span style="color: var(--accent-orange); font-weight: 700; font-size: 18px;">💎 {{ formatCredits(userCredits) }}</span>
+          <span style="margin-left: 12px; font-size: 12px;">（1元 = 3,000 积分）</span>
+        </div>
+        <div class="payment-plans credit-packages">
+          <div v-for="pkg in creditPackages" :key="pkg.key" class="plan-card" :class="{ selected: selectedPackage === pkg.key, recommend: pkg.recommend }" @click="selectedPackage = pkg.key">
+            <div v-if="pkg.recommend" class="plan-badge">推荐</div>
+            <div class="plan-name">{{ pkg.label }}</div>
             <div class="plan-price">
               <span class="price-symbol">¥</span>
-              <span class="price-num">{{ plan.price }}</span>
+              <span class="price-num">{{ pkg.price }}</span>
             </div>
-            <div class="plan-desc">{{ plan.desc }}</div>
-            <div class="plan-unit">{{ plan.unit }}</div>
+            <div class="plan-credits">💎 {{ pkg.credits.toLocaleString() }} 积分</div>
+            <div class="plan-desc">{{ pkg.desc }}</div>
           </div>
         </div>
         <div class="payment-features">
-          <div class="feature-item" v-for="feat in paymentFeatures" :key="feat">
-            <span class="feat-check">✓</span> {{ feat }}
-          </div>
+          <div class="feature-item"><span class="feat-check">✓</span> 生成项目：500 积分/次</div>
+          <div class="feature-item"><span class="feat-check">✓</span> 修改代码：300 积分/次</div>
+          <div class="feature-item"><span class="feat-check">✓</span> 代码检测+AI修复：200 积分/次</div>
+          <div class="feature-item"><span class="feat-check">✓</span> 部署脚本生成 & 远程部署：免费</div>
+          <div class="feature-item"><span class="feat-check">✓</span> 积分永不过期</div>
         </div>
       </div>
       <template #footer>
         <div class="payment-footer">
-          <el-button v-if="paymentStatus.paid" type="success" disabled>
-            已是会员 · {{ planLabel }}
-          </el-button>
-          <el-button v-else type="primary" size="large" :loading="payLoading" @click="handlePay" style="width: 200px;">
-            立即开通
+          <el-button type="primary" size="large" :loading="payLoading" @click="handlePay" style="width: 200px;">
+            立即购买
           </el-button>
         </div>
       </template>
@@ -976,18 +1020,16 @@ export default {
       paymentStatus: { paid: false, paid_type: 'free' },
       paymentDialogVisible: false,
       payLoading: false,
-      selectedPlan: 'yearly',
-      planOptions: [
-        { key: 'monthly', label: '月度会员', price: 99, desc: '适合短期项目', unit: '¥3.3/天', recommend: false },
-        { key: 'yearly', label: '年度会员', price: 666, desc: '省 522 元，超值', unit: '¥1.8/天', recommend: true },
+      // selectedPlan removed - using selectedPackage
+      creditPackages: [
+        { key: 'starter', label: '体验包', price: 9.9, credits: 30000, desc: '约60次生成', recommend: false },
+        { key: 'basic', label: '基础包', price: 29, credits: 90000, desc: '约180次生成', recommend: false },
+        { key: 'pro', label: '进阶包', price: 99, credits: 300000, desc: '约600次生成', recommend: true },
+        { key: 'ultimate', label: '旗舰包', price: 299, credits: 900000, desc: '约1800次生成', recommend: false },
       ],
-      paymentFeatures: [
-        'AI 生成完整项目代码',
-        'AI 自动修复代码错误',
-        '无限次使用',
-        '远程部署到服务器',
-        '优先技术支持',
-      ],
+      selectedPackage: 'pro',
+      userCredits: 0,
+      // paymentFeatures removed - credit-based system
       // Login/Register
       loginDialogVisible: false,
       loginMode: 'login', // 'login' or 'register'
@@ -1082,17 +1124,19 @@ export default {
       editUserLoading: false,
       editingUser: null,
       editUserForm: { paid_type: 'free', expires_at: null },
-      configPrices: { monthly: 99, yearly: 666 },
+      creditLogs: [],
+      adminCreditUserId: '',
+      adminAddCreditUserId: '',
+      adminAddCreditAmount: 1000,
+      adminAddCreditDesc: '',
+      adminAddCreditLoading: false,
     }
   },
   computed: {
     currentStacks() {
       return this.techStacks[this.genProjectType] || {}
     },
-    planLabel() {
-      const map = { monthly: '月度会员', yearly: '年度会员', permanent: '永久会员' }
-      return map[this.paymentStatus.paid_type] || '会员'
-    },
+    // planLabel removed - credit-based system
     paidRate() {
       if (this.adminStats.total_users === 0) return 0
       return ((this.adminStats.paid_users / this.adminStats.total_users) * 100).toFixed(1)
@@ -1102,36 +1146,7 @@ export default {
       const q = this.userSearchQuery.toLowerCase()
       return this.adminUsers.filter(u => u.user_id.toLowerCase().includes(q))
     },
-    profilePaidLabel() {
-      const map = {
-        free: '未开通',
-        monthly: '月度会员',
-        yearly: '年度会员',
-        permanent: '永久会员',
-      }
-      return map[this.userProfile.paid_type] || '未开通'
-    },
-    profilePaidTypeTag() {
-      const map = { free: 'info', monthly: '', yearly: 'warning', permanent: 'danger' }
-      return map[this.userProfile.paid_type] || 'info'
-    },
-    profileDaysLeft() {
-      const pt = this.userProfile.paid_type
-      if (pt === 'permanent') return Infinity
-      if (pt === 'free' || !this.userProfile.expires_at) return 0
-      try {
-        const exp = new Date(this.userProfile.expires_at).getTime()
-        const now = Date.now()
-        return Math.ceil((exp - now) / (1000 * 60 * 60 * 24))
-      } catch { return 0 }
-    },
-    profileRemainingText() {
-      const pt = this.userProfile.paid_type
-      if (pt === 'permanent') return '永久有效'
-      const days = this.profileDaysLeft
-      if (days <= 0) return '已过期'
-      return `剩余 ${days} 天`
-    },
+    // Old subscription computed properties removed
   },
   watch: {
     logoClickCount(val) {
@@ -1203,7 +1218,7 @@ export default {
           this.adminToken = this.adminTokenInput
           this.adminLoginVisible = false
           this.$message.success('管理员验证成功')
-          this.loadAdminStats()
+          this.loadAdminStats(); if (this.adminSubTab === 'credits') this.loadCreditLogs()
         } else {
           this.$message.error('Token 无效')
         }
@@ -1296,7 +1311,7 @@ export default {
         this.$message.success('用户状态已更新')
         this.editUserDialogVisible = false
         await this.loadAdminUsers()
-        await this.loadAdminStats()
+        await this.loadAdminStats(); if (this.adminSubTab === 'credits') this.loadCreditLogs()
       } catch (err) {
         this.$message.error(err.response?.data?.detail || '更新失败')
       } finally {
@@ -1326,10 +1341,11 @@ export default {
       try {
         const res = await axios.get(`/api/payment/user/${this.userId}`)
         this.paymentStatus = {
-          paid: res.data.paid,
+          paid: (res.data.credits || 0) > 0,
           paid_type: res.data.paid_type || 'free',
           expires_at: res.data.expires_at,
         }
+        this.userCredits = res.data.credits || 0
       } catch { /* ignore */ }
     },
     showPaymentDialog() {
@@ -1405,17 +1421,11 @@ export default {
       try {
         const res = await axios.post('/api/payment/create', {
           user_id: this.userId,
-          plan: this.selectedPlan,
+          package: this.selectedPackage,
         })
-        if (res.data.already_paid) {
-          this.$message.success('您已是会员')
-          this.paymentDialogVisible = false
-          await this.checkPaymentStatus()
-          return
-        }
         if (res.data.pay_url) {
           window.open(res.data.pay_url, '_blank')
-          this.$message.info('请在新窗口完成支付')
+          this.$message.info('请在新窗口完成支付，支付成功后积分自动到账')
           this.pollPaymentStatus(res.data.order_id)
         }
       } catch (err) {
@@ -1431,7 +1441,7 @@ export default {
         try {
           const res = await axios.get(`/api/payment/check/${orderId}`)
           if (res.data.status === 'paid') {
-            this.$message.success('支付成功！已开通会员')
+            this.$message.success('支付成功！积分已到账')
             this.paymentDialogVisible = false
             await this.checkPaymentStatus()
             return
@@ -1440,8 +1450,9 @@ export default {
       }
       this.$message.info('支付确认中，请稍后刷新页面查看')
     },
-    async requirePayment(feature) {
-      if (this.paymentStatus.paid) return true
+    async requireCredits(cost, featureName) {
+      if (this.userCredits >= cost) return true
+      this.$message.warning(`积分不足，${featureName}需要 ${cost} 积分，当前余额 ${this.userCredits} 积分`)
       this.showPaymentDialog()
       return false
     },
@@ -1556,7 +1567,7 @@ export default {
       } catch { this.servers = [] }
     },
     async startRemoteDeploy() {
-      if (!(await this.requirePayment('deploy'))) return
+      // Deploy is free - no credit check needed
       if (!this.scriptOutput) { this.$message.warning('请先生成部署脚本'); return }
 
       this.remoteDeploying = true
@@ -1639,7 +1650,7 @@ export default {
       this.genTechStack = stacks[0] || ''
     },
     async generateProject() {
-      if (!(await this.requirePayment('generate'))) return
+      if (!(await this.requireCredits(500, '生成项目'))) return
       if (!this.genDescription.trim()) { this.$message.warning('请输入项目描述'); return }
 
       this.genLoading = true
@@ -1654,7 +1665,8 @@ export default {
         })
         this.genFiles = res.data.files || []
         if (this.genFiles.length > 0) this.genSelectedFile = 0
-        this.$message.success(`项目生成完成，共 ${this.genFiles.length} 个文件`)
+        this.updateCreditsFromResponse(res)
+        this.$message.success(`项目生成完成，共 ${this.genFiles.length} 个文件，消耗 500 积分`)
       } catch (err) {
         if (err.response?.status === 402) {
           this.showPaymentDialog()
@@ -1715,7 +1727,7 @@ export default {
     async aiModifyProject() {
       if (!this.editZipFile) { this.$message.warning('请先上传项目源码'); return }
       if (!this.editCodeDescription.trim()) { this.$message.warning('请描述修改需求'); return }
-      if (!(await this.requirePayment('modify-code'))) return
+      if (!(await this.requireCredits(300, '修改代码'))) return
 
       this.editCodeLoading = true
       this.editModifyResult = []
@@ -1732,7 +1744,8 @@ export default {
         this.editModifyResult = res.data.files || []
         if (this.editModifyResult.length > 0) {
           this.editCodeSelectedFile = 0
-          this.$message.success(`修改完成，共 ${this.editModifyResult.length} 个文件`)
+          this.updateCreditsFromResponse(res)
+          this.$message.success(`修改完成，共 ${this.editModifyResult.length} 个文件，消耗 300 积分`)
         } else {
           this.$message.info('AI 未检测到需要修改的内容')
         }
@@ -1793,14 +1806,15 @@ export default {
     },
     async repairErrors() {
       if (this.selectedErrors.length === 0) return
-      if (!(await this.requirePayment('fix'))) return
+      if (!(await this.requireCredits(200, '代码修复'))) return
       this.repairing = true
       this.repairResults = []
       try {
         const errors = this.selectedErrors.map(idx => this.analysisResult.errors[idx])
         const res = await axios.post('/api/fix/repair', { path: this.fixProjectPath, errors })
         this.repairResults = res.data.results.map(r => ({ ...r, applied: false }))
-        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件`)
+        this.updateCreditsFromResponse(res)
+        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件，消耗 200 积分`)
       } catch (err) {
         if (err.response?.status === 402) {
           this.showPaymentDialog()
@@ -1830,6 +1844,7 @@ export default {
           headers: { 'x-user-id': this.userId },
         })
         this.userProfile = res.data
+        this.userCredits = res.data.credits || 0
         this.userProfileLoaded = true
       } catch { /* ignore */ }
     },
@@ -1838,6 +1853,48 @@ export default {
       try {
         return new Date(t).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
       } catch { return t }
+    },
+
+
+    // ===== Credits =====
+    formatCredits(val) {
+      if (val === undefined || val === null) return '0'
+      return val.toLocaleString()
+    },
+    async loadCreditLogs() {
+      try {
+        const params = this.adminCreditUserId ? `?user_id=${this.adminCreditUserId}` : ''
+        const res = await axios.get(`/api/admin/credit-logs${params}`, { headers: this.getAdminHeaders() })
+        this.creditLogs = res.data.logs || []
+      } catch (err) {
+        if (err.response?.status === 403) this.$message.error('需要管理员权限')
+      }
+    },
+    async adminAddCredits() {
+      if (!this.adminAddCreditUserId.trim()) { this.$message.warning('请输入用户ID'); return }
+      if (!this.adminAddCreditAmount || this.adminAddCreditAmount <= 0) { this.$message.warning('积分数量必须大于0'); return }
+      this.adminAddCreditLoading = true
+      try {
+        const res = await axios.post('/api/admin/add-credits', {
+          user_id: this.adminAddCreditUserId.trim(),
+          amount: this.adminAddCreditAmount,
+          description: this.adminAddCreditDesc || '管理员手动充值',
+        }, { headers: this.getAdminHeaders() })
+        this.$message.success(res.data.message || '积分添加成功')
+        this.adminAddCreditUserId = ''
+        this.adminAddCreditAmount = 1000
+        this.adminAddCreditDesc = ''
+        await this.loadCreditLogs()
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '添加积分失败')
+      } finally {
+        this.adminAddCreditLoading = false
+      }
+    },
+    updateCreditsFromResponse(res) {
+      if (res.data && res.data.credits_remaining !== undefined && res.data.credits_remaining !== null) {
+        this.userCredits = res.data.credits_remaining
+      }
     },
 
     // ===== Edit Code Tab =====
@@ -1867,14 +1924,15 @@ export default {
     },
     async repairErrors() {
       if (this.selectedErrors.length === 0) return
-      if (!(await this.requirePayment('fix'))) return
+      if (!(await this.requireCredits(200, '代码修复'))) return
       this.repairing = true
       this.repairResults = []
       try {
         const errors = this.selectedErrors.map(idx => this.analysisResult.errors[idx])
         const res = await axios.post('/api/fix/repair', { path: this.fixProjectPath, errors })
         this.repairResults = res.data.results.map(r => ({ ...r, applied: false }))
-        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件`)
+        this.updateCreditsFromResponse(res)
+        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件，消耗 200 积分`)
       } catch (err) {
         if (err.response?.status === 402) {
           this.showPaymentDialog()
@@ -1904,6 +1962,7 @@ export default {
           headers: { 'x-user-id': this.userId },
         })
         this.userProfile = res.data
+        this.userCredits = res.data.credits || 0
         this.userProfileLoaded = true
       } catch { /* ignore */ }
     },
@@ -2091,9 +2150,15 @@ export default {
 .diff-code { margin: 0; padding: 12px; font-size: 12px; line-height: 1.6; font-family: 'JetBrains Mono', 'Fira Code', monospace; white-space: pre; color: var(--text-primary); }
 .diff-divider { width: 1px; background: var(--border-color); flex-shrink: 0; }
 
+/* ===== Credit Cost Hint ===== */
+.credit-cost-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--accent-orange); margin-left: 12px; font-weight: 500; }
+.credits-badge-small { font-size: 10px; cursor: pointer; }
+.plan-credits { font-size: 13px; color: var(--accent-blue); font-weight: 600; margin-bottom: 4px; }
+
 /* ===== Payment Dialog ===== */
 .payment-content { padding: 0 4px; }
-.payment-plans { display: flex; gap: 16px; margin-bottom: 24px; }
+.payment-plans { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+.credit-packages .plan-card { flex: 1; min-width: 120px; padding: 16px 12px; }
 .plan-card { flex: 1; border: 2px solid var(--border-color); border-radius: 12px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.3s; position: relative; }
 .plan-card:hover { border-color: var(--text-secondary); }
 .plan-card.selected { border-color: var(--accent-blue); background: rgba(88, 166, 255, 0.05); }
