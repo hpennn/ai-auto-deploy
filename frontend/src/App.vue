@@ -10,7 +10,7 @@
       <div class="header-right">
         <div class="tab-bar">
           <button class="tab-btn" :class="{ active: activeTab === 'deploy' }" @click="activeTab = 'deploy'">
-            📦 部署
+             免费部署
           </button>
           <button class="tab-btn" :class="{ active: activeTab === 'generate' }" @click="activeTab = 'generate'">
             ✨ 生成项目
@@ -352,6 +352,9 @@
             <el-icon v-if="!genLoading"><MagicStick /></el-icon>
             AI 生成项目
           </el-button>
+          <span v-if="userCredits < 500" class="pay-hint" @click="showPaymentDialog">
+            <el-icon><Lock /></el-icon> 积分不足，充值后使用
+          </span>
 
         </div>
       </section>
@@ -457,6 +460,9 @@
               <el-icon v-if="!repairing"><Magic /></el-icon>
               AI 自动修复
             </el-button>
+            <span v-if="userCredits < 200" class="pay-hint" @click="showPaymentDialog">
+              <el-icon><Lock /></el-icon> 积分不足，充值后使用
+            </span>
 
             <el-button size="large" @click="selectAllErrors">全选</el-button>
             <el-button size="large" @click="selectedErrors = []">清空</el-button>
@@ -531,8 +537,8 @@
             <el-button type="primary" size="large" :loading="editCodeLoading" @click="aiModifyProject" :disabled="!editZipFile || !editCodeDescription.trim()">
               🤖 AI 修改项目
             </el-button>
-            <span v-if="!paymentStatus.paid" class="pay-hint" @click="showPaymentDialog">
-              <el-icon><Lock /></el-icon> 需要开通会员
+            <span v-if="userCredits < 300" class="pay-hint" @click="showPaymentDialog">
+              <el-icon><Lock /></el-icon> 积分不足，充值后使用
             </span>
             <el-button v-if="editModifyResult.length > 0" size="large" @click="editModifyResult = []; editCodeSelectedFile = -1; editZipFile = null; editCodeDescription = ''">
               ✕ 清空
