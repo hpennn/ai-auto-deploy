@@ -8,7 +8,11 @@ import uuid
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+import zipfile
+import tempfile
+import shutil
+
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import paramiko
@@ -453,6 +457,75 @@ def _detect_from_remote_info(remote_info: dict, project_path: str) -> dict:
             info["type"] = "static"
 
     return info
+
+
+
+
+@router.post("/upload-detect")
+async def upload_detect(file: UploadFile = File(...)):
+    """上传ZIP项目检测，自动识别项目类型并推荐部署方案"""
+    contents = await file.read()
+    if len(contents) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件不能超过 20MB")
+
+    if not file.filename or not file.filename.lower().endswith('.zip'):
+        raise HTTPException(status_code=400, detail="请上传 .zip 格式文件")
+
+    tmp_dir = tempfile.mkdtemp(prefix="deploy-upload-")
+    zip_path = os.path.join(tmp_dir, "upload.zip")
+    extract_dir = os.path.join(tmp_dir, "project")
+
+    try:
+        with open(zip_path, "wb") as f:
+            f.write(contents)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_dir)
+
+        # 如果解压后只有一个子目录，使用该子目录作为项目根目录
+        entries = os.listdir(extract_dir)
+        if len(entries) == 1:
+            single_entry = os.path.join(extract_dir, entries[0])
+            if os.path.isdir(single_entry):
+                extract_dir = single_entry
+
+        # 调用已有的 detect_project_type 检测项目类型
+        info = detect_project_type(extract_dir)
+        project_name = os.path.basename(os.path.abspath(extract_dir))
+        if not project_name or project_name == "project":
+            # 使用上传文件名作为项目名
+            project_name = os.path.splitext(file.filename)[0]
+        info["project_name"] = project_name
+        info["path"] = extract_dir
+        info["remote"] = False
+        info["temp_dir"] = tmp_dir
+
+        # 根据项目类型推荐部署方式
+        recommend_deploy = "local"
+        try:
+            pkg_json = os.path.join(extract_dir, "package.json")
+            dockerfile = os.path.join(extract_dir, "Dockerfile")
+            req_txt = os.path.join(extract_dir, "requirements.txt")
+            app_py = os.path.join(extract_dir, "app.py")
+            main_py = os.path.join(extract_dir, "main.py")
+
+            if os.path.isfile(dockerfile):
+                recommend_deploy = "docker"
+            elif os.path.isfile(pkg_json):
+                recommend_deploy = "cloudflare"
+            elif os.path.isfile(req_txt) and (os.path.isfile(app_py) or os.path.isfile(main_py)):
+                recommend_deploy = "server"
+        except Exception:
+            pass
+
+        info["recommend_deploy"] = recommend_deploy
+        return info
+    except zipfile.BadZipFile:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="无效的ZIP文件")
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"上传检测失败: {str(e)}")
 
 
 @router.post("/generate")

@@ -1146,6 +1146,10 @@ export default {
       availablePaths: [],
       guideExpanded: true,
       projectPath: '',
+      deployMode: 'upload',
+      deployUploadFile: null,
+      deployTempDir: '',
+      deploySshCollapsed: true,
       projectInfo: null,
       detecting: false,
       generating: false,
@@ -1626,19 +1630,84 @@ export default {
     onPathSelect(val) {
       if (val) this.detectProject()
     },
+    // === Deploy upload mode methods ===
+    triggerDeployZipSelect() { this.$refs.deployZipInput.click(); },
+    handleDeployZipSelect(e) {
+      const file = e.target.files[0];
+      if (file) {
+        if (!file.name.toLowerCase().endsWith('.zip')) {
+          this.$message.error('请选择 .zip 格式文件');
+          return;
+        }
+        this.deployUploadFile = file;
+      }
+    },
+    handleDeployZipDrop(e) {
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        if (!file.name.toLowerCase().endsWith('.zip')) {
+          this.$message.error('请选择 .zip 格式文件');
+          return;
+        }
+        this.deployUploadFile = file;
+      }
+    },
+    async detectUploadedProject() {
+      if (!this.deployUploadFile) {
+        this.$message.warning('请先选择 ZIP 文件');
+        return;
+      }
+      this.detecting = true;
+      try {
+        const formData = new FormData();
+        formData.append('file', this.deployUploadFile);
+        const res = await fetch('/api/deploy/upload-detect', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || '上传检测失败');
+        }
+        const info = await res.json();
+        this.projectInfo = info;
+        this.projectPath = info.path || '';
+        this.deployTempDir = info.temp_dir || '';
+        if (info.recommend_deploy && this.deployOptions.some(o => o.value === info.recommend_deploy)) {
+          this.deployType = info.recommend_deploy;
+        }
+        this.$message.success(`识别成功：${info.project_name} (${info.type})`);
+      } catch (err) {
+        this.$message.error(err.message || '上传检测失败');
+      } finally {
+        this.detecting = false;
+      }
+    },
+    onDeployModeChange() {
+      this.projectInfo = null;
+      this.projectPath = '';
+      this.scriptOutput = '';
+      this.scriptFilename = '';
+      this.extraFiles = [];
+      this.deployUploadFile = null;
+      this.deployTempDir = '';
+      this.deployType = 'local';
+    },
     async detectProject() {
       if (!this.projectPath.trim()) { this.$message.warning('请输入项目路径'); return }
-      if (!this.sshConnected) { this.$message.warning('请先连接远程服务器'); return }
+      if (this.deployMode === 'remote' && !this.sshConnected) { this.$message.warning('请先连接远程服务器'); return }
       this.detecting = true
       this.projectInfo = null
       this.scriptOutput = ''
       try {
-        const res = await axios.post('/api/deploy/detect', {
-          path: this.projectPath,
-          session_id: this.sshSessionId,
-        })
+        const payload = { path: this.projectPath }
+        if (this.sshSessionId) payload.session_id = this.sshSessionId
+        const res = await axios.post('/api/deploy/detect', payload)
         this.projectInfo = res.data
         this.domain = res.data.project_name
+        if (res.data.recommend_deploy && this.deployOptions.some(o => o.value === res.data.recommend_deploy)) {
+          this.deployType = res.data.recommend_deploy
+        }
         this.$message.success('项目检测完成')
       } catch (err) {
         this.$message.error(err.response?.data?.detail || '检测失败')
