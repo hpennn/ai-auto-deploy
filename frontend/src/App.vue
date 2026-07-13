@@ -263,6 +263,7 @@
               <el-icon v-if="!remoteDeploying"><Upload /></el-icon>
               {{ remoteDeploying ? '部署中...' : '🚀 远程部署' }}
             </el-button>
+            <span class="free-badge">🆓 部署功能永久免费</span>
           </div>
 
           <!-- Terminal Output -->
@@ -351,7 +352,7 @@
             <el-icon v-if="!genLoading"><MagicStick /></el-icon>
             AI 生成项目
           </el-button>
-          <span class="credit-cost-hint">💎 消耗 500 积分</span>
+
         </div>
       </section>
 
@@ -456,7 +457,7 @@
               <el-icon v-if="!repairing"><Magic /></el-icon>
               AI 自动修复
             </el-button>
-            <span class="credit-cost-hint">💎 消耗 200 积分</span>
+
             <el-button size="large" @click="selectAllErrors">全选</el-button>
             <el-button size="large" @click="selectedErrors = []">清空</el-button>
           </div>
@@ -2152,6 +2153,7 @@ export default {
 
 /* ===== Credit Cost Hint ===== */
 .credit-cost-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--accent-orange); margin-left: 12px; font-weight: 500; }
+.free-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--accent-green); margin-left: 12px; font-weight: 600; background: rgba(63, 185, 80, 0.1); padding: 4px 12px; border-radius: 14px; border: 1px solid rgba(63, 185, 80, 0.3); }
 .credits-badge-small { font-size: 10px; cursor: pointer; }
 .plan-credits { font-size: 13px; color: var(--accent-blue); font-weight: 600; margin-bottom: 4px; }
 
