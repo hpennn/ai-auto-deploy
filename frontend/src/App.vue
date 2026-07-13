@@ -122,58 +122,55 @@
         </div>
       </section>
 
-      <!-- Step 1: Server Connection -->
+      <!-- Step 1: 选择检测方式 -->
       <section class="step-section">
         <div class="step-header">
           <span class="step-num">1</span>
-          <span class="step-title">连接远程服务器</span>
-          <el-tag v-if="sshConnected" type="success" effect="dark" size="small" class="connected-badge">
-            🟢 已连接 {{ sshHostInfo }}
-          </el-tag>
+          <span class="step-title">选择检测方式</span>
         </div>
         <div class="step-body">
-          <!-- Connection Form -->
-          <div v-if="!sshConnected" class="ssh-form">
-            <div class="ssh-form-row">
-              <div class="ssh-form-item" style="flex:2">
-                <label>IP / 域名</label>
-                <el-input v-model="sshForm.host" placeholder="192.168.1.100 或 example.com" size="large" />
-              </div>
-              <div class="ssh-form-item" style="flex:1; max-width:140px">
-                <label>SSH 端口</label>
-                <el-input v-model.number="sshForm.port" placeholder="22" size="large" />
-              </div>
+          <div class="fix-mode-tabs">
+            <div class="fix-mode-card" :class="{ active: deployMode === 'upload' }" @click="deployMode = 'upload'; onDeployModeChange()">
+              <div class="fix-mode-icon">📤</div>
+              <div class="fix-mode-label">上传项目</div>
+              <div class="fix-mode-desc">上传ZIP自动识别并推荐部署方案</div>
             </div>
-            <div class="ssh-form-row">
-              <div class="ssh-form-item" style="flex:1">
-                <label>用户名</label>
-                <el-input v-model="sshForm.username" placeholder="root" size="large" />
-              </div>
-              <div class="ssh-form-item" style="flex:1">
-                <label>密码</label>
-                <el-input v-model="sshForm.password" type="password" show-password placeholder="服务器密码" size="large" @keyup.enter="connectServer" />
-              </div>
+            <div class="fix-mode-card" :class="{ active: deployMode === 'server' }" @click="deployMode = 'server'; onDeployModeChange()">
+              <div class="fix-mode-icon">🖥️</div>
+              <div class="fix-mode-label">连接服务器</div>
+              <div class="fix-mode-desc">选择服务器，输入项目路径检测</div>
             </div>
-            <el-button type="primary" size="large" :loading="sshConnecting" @click="connectServer" :disabled="!sshForm.host || !sshForm.password">
-              连接服务器
-            </el-button>
           </div>
-          <!-- Connected State -->
-          <div v-else class="ssh-connected">
-            <div class="ssh-connected-info">
-              <span class="ssh-connected-icon">🖥️</span>
-              <div>
-                <div class="ssh-connected-host">{{ sshForm.host }}:{{ sshForm.port }}</div>
-                <div class="ssh-connected-user">{{ sshForm.username }}@{{ sshForm.host }}</div>
-              </div>
-            </div>
-            <el-button type="danger" size="small" plain @click="disconnectServer">
-              断开连接
-            </el-button>
-          </div>
+        </div>
+      </section>
 
-          <!-- Path Selection (only when connected) -->
-          <div v-if="sshConnected" class="path-section">
+      <!-- 上传模式内容 -->
+      <section v-if="deployMode === 'upload'" class="step-section">
+        <div class="step-body">
+          <div class="upload-zone" @click="triggerDeployZipSelect" @dragover.prevent @drop.prevent="handleDeployZipDrop">
+            <div class="upload-icon">📦</div>
+            <div class="upload-text">拖拽 ZIP 文件到此处，或 <em>点击选择</em></div>
+            <div class="upload-hint">支持 .zip 格式，最大 20MB</div>
+          </div>
+          <input ref="deployZipInput" type="file" accept=".zip" style="display:none" @change="handleDeployZipSelect" />
+          <div v-if="deployUploadFile" class="file-info-bar">
+            📎 {{ deployUploadFile.name }} ({{ formatFileSize(deployUploadFile.size) }})
+            <el-button text size="small" @click="deployUploadFile = null" style="margin-left: 8px; color: var(--text-secondary);">✕</el-button>
+          </div>
+          <el-button type="primary" size="large" :loading="detecting" :disabled="!deployUploadFile" @click="detectUploadedProject" style="margin-top:12px">
+            🔍 检测项目
+          </el-button>
+        </div>
+      </section>
+
+      <!-- 服务器模式：路径选择（仅连接后显示） -->
+      <section v-if="deployMode === 'server' && sshConnected" class="step-section">
+        <div class="step-header">
+          <span class="step-num">2</span>
+          <span class="step-title">项目路径</span>
+        </div>
+        <div class="step-body">
+          <div class="path-section">
             <div class="path-select-row">
               <span class="path-select-label">远程项目：</span>
               <el-select v-model="projectPath" placeholder="选择远程项目目录" filterable clearable size="large" style="flex:1" @change="onPathSelect" :loading="scanningPaths">
@@ -306,6 +303,56 @@
               </div>
               <div class="terminal-body compact"><pre><code>{{ file.content }}</code></pre></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 底部SSH连接（仅远程模式，默认折叠） -->
+      <section v-if="deployMode === 'server'" class="step-section ssh-collapsible">
+        <div class="ssh-collapse-header" @click="deploySshCollapsed = !deploySshCollapsed">
+          <span>🔗 SSH 连接</span>
+          <span v-if="sshConnected" class="ssh-status-connected">🟢 {{ sshForm.host }}</span>
+          <el-icon class="guide-arrow" :class="{ expanded: !deploySshCollapsed }"><ArrowDown /></el-icon>
+        </div>
+        <div v-show="!deploySshCollapsed" class="ssh-collapse-body">
+          <!-- Connection Form -->
+          <div v-if="!sshConnected" class="ssh-form">
+            <div class="ssh-form-row">
+              <div class="ssh-form-item" style="flex:2">
+                <label>IP / 域名</label>
+                <el-input v-model="sshForm.host" placeholder="192.168.1.100 或 example.com" size="large" />
+              </div>
+              <div class="ssh-form-item" style="flex:1; max-width:140px">
+                <label>SSH 端口</label>
+                <el-input v-model.number="sshForm.port" placeholder="22" size="large" />
+              </div>
+            </div>
+            <div class="ssh-form-row">
+              <div class="ssh-form-item" style="flex:1">
+                <label>用户名</label>
+                <el-input v-model="sshForm.username" placeholder="root" size="large" />
+              </div>
+              <div class="ssh-form-item" style="flex:1">
+                <label>密码</label>
+                <el-input v-model="sshForm.password" type="password" show-password placeholder="服务器密码" size="large" @keyup.enter="connectServer" />
+              </div>
+            </div>
+            <el-button type="primary" size="large" :loading="sshConnecting" @click="connectServer" :disabled="!sshForm.host || !sshForm.password">
+              连接服务器
+            </el-button>
+          </div>
+          <!-- Connected State -->
+          <div v-else class="ssh-connected">
+            <div class="ssh-connected-info">
+              <span class="ssh-connected-icon">🖥️</span>
+              <div>
+                <div class="ssh-connected-host">{{ sshForm.host }}:{{ sshForm.port }}</div>
+                <div class="ssh-connected-user">{{ sshForm.username }}@{{ sshForm.host }}</div>
+              </div>
+            </div>
+            <el-button type="danger" size="small" plain @click="disconnectServer">
+              断开连接
+            </el-button>
           </div>
         </div>
       </section>
@@ -1146,7 +1193,7 @@ export default {
       availablePaths: [],
       guideExpanded: true,
       projectPath: '',
-      deployMode: 'upload',
+      deployMode: 'server',
       deployUploadFile: null,
       deployTempDir: '',
       deploySshCollapsed: true,
@@ -2476,6 +2523,18 @@ export default {
 .guide-title { font-size: 15px; font-weight: 600; color: var(--text-primary); flex: 1; }
 .guide-arrow { transition: transform 0.3s; color: var(--text-secondary); }
 .guide-arrow.expanded { transform: rotate(180deg); }
+
+.ssh-collapsible { margin-top: 20px; }
+.ssh-collapse-header {
+  display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; padding: 12px 16px;
+  background: rgba(255,255,255,0.03); border-radius: 8px;
+  font-weight: 500; color: var(--text-primary);
+}
+.ssh-collapse-header:hover { background: rgba(255,255,255,0.06); }
+.ssh-status-connected { color: #67c23a; font-size: 13px; margin-left: auto; margin-right: 8px; }
+.ssh-collapse-body { padding: 16px 0 0; }
+
 .guide-body { padding: 0 20px 16px 20px; }
 .guide-steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
 .guide-step { display: flex; gap: 12px; padding: 12px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color); }
