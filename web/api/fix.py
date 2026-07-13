@@ -4,18 +4,27 @@ Code Fix API routes - 代码错误检测与自动修复
 
 import os
 import ast
+import io
 import re
 import json
+import asyncio
 import py_compile
 import traceback
 import difflib
+import zipfile
+import tempfile
+import shutil
+import base64
 from typing import Optional
 
 import requests
-from fastapi import APIRouter, HTTPException
+import paramiko
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from web.database import get_user_credits, deduct_credits
+from web.api.servers import get_server_credentials, load_config
 
 router = APIRouter()
 
@@ -710,3 +719,372 @@ async def apply_fix(req: dict):
             applied.append({"file": fix['file'], "status": "failed", "error": str(e)})
     
     return {"applied": applied}
+
+# ============ 远程服务器检测/修复 ============
+
+def _get_ssh_client(creds: dict) -> paramiko.SSHClient:
+    """创建SSH连接"""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    connect_kwargs = {
+        "hostname": creds["host"],
+        "port": creds.get("port", 22),
+        "username": creds.get("user", "root"),
+        "timeout": 15,
+    }
+    key_content = creds.get("key_content")
+    password = creds.get("password")
+
+    if key_content:
+        key_file_obj = io.StringIO(key_content)
+        try:
+            pkey = paramiko.RSAKey.from_private_key(key_file_obj)
+        except Exception:
+            key_file_obj = io.StringIO(key_content)
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key(key_file_obj)
+            except Exception:
+                key_file_obj = io.StringIO(key_content)
+                pkey = paramiko.ECDSAKey.from_private_key(key_file_obj)
+        connect_kwargs["pkey"] = pkey
+    elif password:
+        connect_kwargs["password"] = password
+    else:
+        raise RuntimeError("需要提供密码或密钥")
+
+    client.connect(**connect_kwargs)
+    return client
+
+
+def _download_remote_project(client: paramiko.SSHClient, remote_path: str, local_dir: str):
+    """通过SFTP下载远程项目到本地临时目录"""
+    sftp = client.open_sftp()
+    try:
+        def _recursive_download(remote_dir: str, local_base: str):
+            try:
+                entries = sftp.listdir_attr(remote_dir)
+            except Exception:
+                return
+
+            for entry in entries:
+                remote_full = remote_dir + "/" + entry.filename
+                local_full = os.path.join(local_base, entry.filename)
+
+                # 跳过隐藏目录和常见的非代码目录
+                if entry.filename.startswith('.') or entry.filename in ('node_modules', '__pycache__', 'venv', '.venv', 'dist', 'build'):
+                    continue
+
+                import stat as stat_module
+                if stat_module.S_ISDIR(entry.st_mode):
+                    os.makedirs(local_full, exist_ok=True)
+                    _recursive_download(remote_full, local_full)
+                else:
+                    # 只下载代码相关文件
+                    code_exts = {'.py', '.js', '.ts', '.jsx', '.tsx', '.vue', '.html', '.css',
+                                 '.json', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.sh',
+                                 '.sql', '.xml', '.md', '.txt', '.c', '.cpp', '.h', '.go',
+                                 '.php', '.rb', '.java', '.svelte'}
+                    _, ext = os.path.splitext(entry.filename)
+                    if ext.lower() in code_exts or entry.filename in ('Makefile', 'Dockerfile', '.gitignore', '.env', 'requirements.txt', 'package.json', 'package-lock.json', 'go.mod', 'go.sum'):
+                        try:
+                            sftp.get(remote_full, local_full)
+                        except Exception:
+                            pass
+
+        _recursive_download(remote_path, local_dir)
+    finally:
+        sftp.close()
+
+
+@router.post("/analyze-remote")
+async def analyze_remote(req: dict):
+    """通过SSH连接远程服务器检测项目"""
+    server_id = req.get("server_id", "")
+    project_path = req.get("project_path", "").strip()
+    user_id = req.get("user_id", "")
+
+    if not server_id:
+        raise HTTPException(status_code=400, detail="请选择服务器")
+    if not project_path:
+        raise HTTPException(status_code=400, detail="请输入项目路径")
+
+    # 获取服务器配置
+    config = load_config()
+    servers = config.get("servers", [])
+    server_index = None
+
+    try:
+        server_index = int(server_id)
+    except ValueError:
+        for i, s in enumerate(servers):
+            if s.get("host") == server_id:
+                server_index = i
+                break
+
+    if server_index is None or server_index >= len(servers):
+        raise HTTPException(status_code=400, detail="服务器不存在")
+
+    creds = get_server_credentials(servers[server_index])
+
+    loop = asyncio.get_event_loop()
+
+    def _do_download_and_analyze():
+        client = _get_ssh_client(creds)
+        try:
+            # 检查远程目录是否存在
+            stdin, stdout, stderr = client.exec_command(f'[ -d "{project_path}" ] && echo "exists" || echo "not_found"')
+            result = stdout.read().decode().strip()
+            if result != "exists":
+                raise HTTPException(status_code=400, detail=f"远程目录不存在: {project_path}")
+
+            # 下载到临时目录
+            tmp_dir = tempfile.mkdtemp(prefix="fix-remote-")
+            _download_remote_project(client, project_path, tmp_dir)
+
+            # 检测
+            errors = analyze_project(tmp_dir)
+            return errors, tmp_dir
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"远程检测失败: {str(e)}")
+        finally:
+            client.close()
+
+    try:
+        errors, tmp_dir = await loop.run_in_executor(None, _do_download_and_analyze)
+        return {
+            "errors": errors,
+            "total": len(errors),
+            "error_count": sum(1 for e in errors if e["severity"] == "error"),
+            "warning_count": sum(1 for e in errors if e["severity"] == "warning"),
+            "path": project_path,
+            "mode": "remote",
+            "temp_dir": tmp_dir,
+            "fix_credit_cost": CREDIT_COST_FIX,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
+
+
+@router.post("/analyze-upload")
+async def analyze_upload(file: UploadFile = File(...), user_id: str = Form(default="")):
+    """上传ZIP项目检测"""
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件不能超过 10MB")
+
+    if not file.filename or not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="请上传 .zip 格式文件")
+
+    tmp_dir = tempfile.mkdtemp(prefix="fix-upload-")
+    zip_path = os.path.join(tmp_dir, "upload.zip")
+    extract_dir = os.path.join(tmp_dir, "project")
+
+    try:
+        with open(zip_path, "wb") as f:
+            f.write(contents)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_dir)
+
+        # 如果解压后只有一个子目录，使用该子目录作为项目根目录
+        entries = os.listdir(extract_dir)
+        if len(entries) == 1:
+            single_entry = os.path.join(extract_dir, entries[0])
+            if os.path.isdir(single_entry):
+                extract_dir = single_entry
+
+        errors = analyze_project(extract_dir)
+
+        return {
+            "errors": errors,
+            "total": len(errors),
+            "error_count": sum(1 for e in errors if e["severity"] == "error"),
+            "warning_count": sum(1 for e in errors if e["severity"] == "warning"),
+            "path": extract_dir,
+            "mode": "upload",
+            "temp_dir": extract_dir,
+            "fix_credit_cost": CREDIT_COST_FIX,
+        }
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="无效的ZIP文件")
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
+
+
+@router.post("/repair-upload")
+async def repair_upload(req: dict):
+    """修复上传的项目"""
+    temp_dir = req.get("temp_dir", "").strip()
+    errors = req.get("errors", [])
+    user_id = req.get("user_id", "")
+
+    if not temp_dir or not os.path.isdir(temp_dir):
+        raise HTTPException(status_code=400, detail="项目临时目录不存在")
+    if not errors:
+        raise HTTPException(status_code=400, detail="没有需要修复的错误")
+
+    # Check credits
+    if user_id:
+        credits = get_user_credits(user_id)
+        if credits < CREDIT_COST_FIX:
+            raise HTTPException(status_code=402, detail=f"积分不足，代码修复需要 {CREDIT_COST_FIX} 积分，当前余额 {credits} 积分")
+
+    results = []
+    for error in errors:
+        try:
+            result = generate_fix(temp_dir, error if isinstance(error, dict) else error)
+            results.append(result)
+        except Exception as e:
+            err = error if isinstance(error, dict) else {"file": error.file, "line": error.line, "error": str(e), "error_type": "unknown"}
+            results.append({
+                "file": err.get("file", "unknown"),
+                "original": "",
+                "fixed": "",
+                "diff": f"修复失败: {str(e)}"
+            })
+
+    # Deduct credits
+    if user_id and results:
+        deduct_credits(user_id, CREDIT_COST_FIX, "代码检测+修复(上传)")
+
+    return {
+        "results": results,
+        "temp_dir": temp_dir,
+        "credits_cost": CREDIT_COST_FIX,
+        "credits_remaining": get_user_credits(user_id) if user_id else None,
+    }
+
+
+@router.post("/repair-remote")
+async def repair_remote(req: dict):
+    """修复远程服务器上的项目"""
+    server_id = req.get("server_id", "")
+    project_path = req.get("project_path", "").strip()
+    errors = req.get("errors", [])
+    user_id = req.get("user_id", "")
+
+    if not server_id:
+        raise HTTPException(status_code=400, detail="请选择服务器")
+    if not project_path:
+        raise HTTPException(status_code=400, detail="请输入项目路径")
+    if not errors:
+        raise HTTPException(status_code=400, detail="没有需要修复的错误")
+
+    # Check credits
+    if user_id:
+        credits = get_user_credits(user_id)
+        if credits < CREDIT_COST_FIX:
+            raise HTTPException(status_code=402, detail=f"积分不足，代码修复需要 {CREDIT_COST_FIX} 积分，当前余额 {credits} 积分")
+
+    # 获取服务器配置
+    config = load_config()
+    servers = config.get("servers", [])
+    server_index = None
+
+    try:
+        server_index = int(server_id)
+    except ValueError:
+        for i, s in enumerate(servers):
+            if s.get("host") == server_id:
+                server_index = i
+                break
+
+    if server_index is None or server_index >= len(servers):
+        raise HTTPException(status_code=400, detail="服务器不存在")
+
+    creds = get_server_credentials(servers[server_index])
+
+    loop = asyncio.get_event_loop()
+
+    def _do_repair_remote():
+        # 先下载到临时目录
+        client = _get_ssh_client(creds)
+        try:
+            tmp_dir = tempfile.mkdtemp(prefix="fix-remote-repair-")
+            _download_remote_project(client, project_path, tmp_dir)
+
+            # 本地修复
+            results = []
+            for error in errors:
+                try:
+                    result = generate_fix(tmp_dir, error if isinstance(error, dict) else error)
+                    results.append(result)
+                except Exception as e:
+                    err = error if isinstance(error, dict) else {"file": "unknown"}
+                    results.append({
+                        "file": err.get("file", "unknown"),
+                        "original": "",
+                        "fixed": "",
+                        "diff": f"修复失败: {str(e)}"
+                    })
+
+            # 将修复后的文件写回远程服务器
+            sftp = client.open_sftp()
+            try:
+                for result in results:
+                    if result.get("fixed"):
+                        remote_path = os.path.join(project_path, result["file"])
+                        encoded = base64.b64encode(result["fixed"].encode("utf-8")).decode("ascii")
+                        cmd = f'echo "{encoded}" | base64 -d > "{remote_path}"'
+                        _stdin, _stdout, _stderr = client.exec_command(cmd, timeout=30)
+                        _stdout.read()
+            finally:
+                sftp.close()
+
+            return results
+        finally:
+            client.close()
+
+    try:
+        results = await loop.run_in_executor(None, _do_repair_remote)
+
+        if user_id and results:
+            deduct_credits(user_id, CREDIT_COST_FIX, "代码检测+修复(远程)")
+
+        return {
+            "results": results,
+            "credits_cost": CREDIT_COST_FIX,
+            "credits_remaining": get_user_credits(user_id) if user_id else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"远程修复失败: {str(e)}")
+
+
+@router.post("/download-repaired")
+async def download_repaired(req: dict):
+    """下载修复后的项目为ZIP"""
+    temp_dir = req.get("temp_dir", "").strip()
+
+    if not temp_dir or not os.path.isdir(temp_dir):
+        raise HTTPException(status_code=400, detail="临时目录不存在")
+
+    tmp_zip = tempfile.mktemp(suffix=".zip")
+    try:
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(temp_dir):
+                # 跳过隐藏目录
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for fname in files:
+                    filepath = os.path.join(root, fname)
+                    arcname = os.path.relpath(filepath, temp_dir)
+                    zf.write(filepath, arcname)
+
+        def iter_file():
+            with open(tmp_zip, "rb") as fh:
+                yield from fh
+
+        return StreamingResponse(
+            iter_file(),
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=repaired-project.zip"},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"打包失败: {str(e)}")

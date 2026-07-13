@@ -4,18 +4,22 @@ Generate Project API routes - AI 自动生成项目代码
 
 import os
 import re
+import io
 import json
+import asyncio
 import zipfile
 import tempfile
 import shutil
 from typing import Optional
 
 import requests
+import paramiko
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from web.database import is_paid, get_user_credits, deduct_credits
+from web.api.servers import get_server_credentials, load_config
 
 router = APIRouter()
 
@@ -417,3 +421,133 @@ async def download_modified(req: ModifyCodeDownloadRequest):
         )
     finally:
         pass
+
+@router.post("/save-to-server")
+async def save_to_server(req: dict):
+    """将生成的项目保存到远程服务器"""
+    files = req.get("files", [])
+    server_id = req.get("server_id", "")
+    target_path = req.get("target_path", "").strip()
+    user_id = req.get("user_id", "")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="没有可保存的文件")
+    if not target_path:
+        raise HTTPException(status_code=400, detail="请输入目标路径")
+    if not server_id:
+        raise HTTPException(status_code=400, detail="请选择服务器")
+
+    # 获取服务器配置
+    config = load_config()
+    servers = config.get("servers", [])
+    server_index = None
+
+    # server_id 可以是索引或host
+    try:
+        server_index = int(server_id)
+    except ValueError:
+        for i, s in enumerate(servers):
+            if s.get("host") == server_id:
+                server_index = i
+                break
+
+    if server_index is None or server_index >= len(servers):
+        raise HTTPException(status_code=400, detail="服务器不存在")
+
+    creds = get_server_credentials(servers[server_index])
+
+    # SSH 连接并上传文件
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    loop = asyncio.get_event_loop()
+
+    def _connect_and_upload():
+        connect_kwargs = {
+            "hostname": creds["host"],
+            "port": creds.get("port", 22),
+            "username": creds.get("user", "root"),
+            "timeout": 15,
+        }
+        key_content = creds.get("key_content")
+        password = creds.get("password")
+
+        if key_content:
+            key_file_obj = io.StringIO(key_content)
+            try:
+                pkey = paramiko.RSAKey.from_private_key(key_file_obj)
+            except Exception:
+                key_file_obj = io.StringIO(key_content)
+                try:
+                    pkey = paramiko.Ed25519Key.from_private_key(key_file_obj)
+                except Exception:
+                    key_file_obj = io.StringIO(key_content)
+                    pkey = paramiko.ECDSAKey.from_private_key(key_file_obj)
+            connect_kwargs["pkey"] = pkey
+        elif password:
+            connect_kwargs["password"] = password
+        else:
+            raise RuntimeError("需要提供密码或密钥")
+
+        client.connect(**connect_kwargs)
+
+        # 创建目标目录
+        sftp = client.open_sftp()
+        try:
+            # 递归创建目录
+            dirs_to_create = set()
+            for f in files:
+                filepath = f.get("filename", "")
+                dirpath = os.path.dirname(filepath)
+                if dirpath:
+                    full_remote_dir = os.path.join(target_path, dirpath)
+                    dirs_to_create.add(full_remote_dir)
+
+            # 先创建目标根目录
+            _remote_mkdir_p(sftp, target_path)
+
+            # 创建子目录
+            for d in sorted(dirs_to_create, key=len):
+                _remote_mkdir_p(sftp, d)
+
+            # 写入文件
+            saved_count = 0
+            for f in files:
+                filepath = f.get("filename", "")
+                file_content = f.get("content", "")
+                if filepath:
+                    remote_file_path = os.path.join(target_path, filepath)
+                    with sftp.file(remote_file_path, "w") as rf:
+                        rf.write(file_content)
+                    saved_count += 1
+
+            return saved_count
+        finally:
+            sftp.close()
+
+    def _remote_mkdir_p(sftp, remote_dir):
+        """递归创建远程目录"""
+        if remote_dir == "/" or remote_dir == "":
+            return
+        try:
+            sftp.stat(remote_dir)
+        except FileNotFoundError:
+            parent = os.path.dirname(remote_dir)
+            _remote_mkdir_p(sftp, parent)
+            try:
+                sftp.mkdir(remote_dir)
+            except IOError:
+                pass  # 目录可能已存在
+
+    try:
+        saved_count = await loop.run_in_executor(None, _connect_and_upload)
+        return {
+            "success": True,
+            "message": f"成功保存 {saved_count} 个文件到 {creds['host']}:{target_path}",
+            "server": creds["host"],
+            "path": target_path,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
+    finally:
+        client.close()

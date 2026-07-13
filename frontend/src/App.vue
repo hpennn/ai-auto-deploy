@@ -385,7 +385,10 @@
           <div class="gen-actions" v-if="genFiles.length > 0">
             <el-button type="success" size="large" @click="downloadGenProject">
               <el-icon><Download /></el-icon>
-              下载 ZIP
+              📥 下载 ZIP
+            </el-button>
+            <el-button type="primary" size="large" @click="openSaveToServer">
+              🖥️ 保存到服务器
             </el-button>
           </div>
         </div>
@@ -394,27 +397,82 @@
 
     <!-- ============ 代码检测 Tab ============ -->
     <main v-if="activeTab === 'fix'" class="main-content">
+      <!-- Step 1: 选择检测方式 -->
       <section class="step-section">
         <div class="step-header">
           <span class="step-num fix-num">1</span>
-          <span class="step-title">输入项目路径</span>
+          <span class="step-title">选择检测方式</span>
         </div>
         <div class="step-body">
-          <el-input v-model="fixProjectPath" placeholder="/path/to/your/project" size="large" clearable @keyup.enter="analyzeCode">
-            <template #prefix><el-icon><Folder /></el-icon></template>
-            <template #append>
-              <el-button type="warning" :loading="analyzing" @click="analyzeCode">
-                <el-icon v-if="!analyzing"><Search /></el-icon>
-                检测错误
-              </el-button>
-            </template>
-          </el-input>
+          <div class="fix-mode-tabs">
+            <div class="fix-mode-card" :class="{ active: fixMode === 'remote' }" @click="fixMode = 'remote'">
+              <div class="fix-mode-icon">🖥️</div>
+              <div class="fix-mode-label">连接服务器</div>
+              <div class="fix-mode-desc">选择服务器，输入项目路径</div>
+            </div>
+            <div class="fix-mode-card" :class="{ active: fixMode === 'upload' }" @click="fixMode = 'upload'">
+              <div class="fix-mode-icon">📦</div>
+              <div class="fix-mode-label">上传项目</div>
+              <div class="fix-mode-desc">上传ZIP文件进行检测</div>
+            </div>
+          </div>
         </div>
       </section>
 
+      <!-- Step 2A: 连接服务器模式 -->
+      <template v-if="fixMode === 'remote'">
+        <section class="step-section">
+          <div class="step-header">
+            <span class="step-num fix-num">2</span>
+            <span class="step-title">选择服务器</span>
+          </div>
+          <div class="step-body">
+            <div v-if="servers.length === 0" style="text-align:center; padding: 20px 0;">
+              <p style="color: var(--text-secondary); margin-bottom: 8px;">暂无已配置的服务器</p>
+              <p style="color: var(--accent-orange); font-size: 13px;">请先去「免费部署」tab 配置服务器信息</p>
+            </div>
+            <template v-else>
+              <el-select v-model="fixServerId" placeholder="选择已配置的服务器" size="large" style="width:100%">
+                <el-option v-for="(s, i) in servers" :key="i" :value="String(i)" :label="`${s.name} (${s.host})`" />
+              </el-select>
+              <el-input v-model="fixProjectPath" placeholder="项目路径，如 /www/wwwroot/my-project" size="large" style="margin-top:12px" clearable @keyup.enter="analyzeRemoteCode" />
+              <el-button type="warning" size="large" :loading="analyzing" @click="analyzeRemoteCode" style="margin-top:12px" :disabled="!fixServerId || !fixProjectPath.trim()">
+                🔍 开始检测
+              </el-button>
+            </template>
+          </div>
+        </section>
+      </template>
+
+      <!-- Step 2B: 上传项目模式 -->
+      <template v-if="fixMode === 'upload'">
+        <section class="step-section">
+          <div class="step-header">
+            <span class="step-num fix-num">2</span>
+            <span class="step-title">上传项目</span>
+          </div>
+          <div class="step-body">
+            <div class="upload-zone" @click="triggerFixZipSelect" @dragover.prevent @drop.prevent="handleFixZipDrop">
+              <div class="upload-icon">📦</div>
+              <div class="upload-text">拖拽 ZIP 文件到此处，或 <em>点击选择</em></div>
+              <div class="upload-hint">支持 .zip 格式，最大 10MB</div>
+            </div>
+            <input ref="fixZipInput" type="file" accept=".zip" style="display:none" @change="handleFixZipSelect" />
+            <div v-if="fixUploadFile" class="file-info-bar">
+              📎 {{ fixUploadFile.name }} ({{ formatFileSize(fixUploadFile.size) }})
+              <el-button text size="small" @click="fixUploadFile = null" style="margin-left: 8px; color: var(--text-secondary);">✕</el-button>
+            </div>
+            <el-button type="warning" size="large" :loading="analyzing" :disabled="!fixUploadFile" @click="analyzeUploadedCode" style="margin-top:12px">
+              🔍 开始检测
+            </el-button>
+          </div>
+        </section>
+      </template>
+
+      <!-- 检测结果展示（两种模式共用） -->
       <section v-if="analysisResult" class="step-section fade-in">
         <div class="step-header">
-          <span class="step-num fix-num">2</span>
+          <span class="step-num fix-num">{{ fixMode === 'remote' ? '3' : '3' }}</span>
           <span class="step-title">检测结果</span>
           <div class="result-summary" v-if="analysisResult.total > 0">
             <el-tag type="danger" effect="dark" size="small">{{ analysisResult.error_count }} 个错误</el-tag>
@@ -448,22 +506,22 @@
         </div>
       </section>
 
+      <!-- 修复区域（两种模式共用） -->
       <section v-if="selectedErrors.length > 0" class="step-section fade-in">
         <div class="step-header">
-          <span class="step-num fix-num">3</span>
+          <span class="step-num fix-num">4</span>
           <span class="step-title">自动修复</span>
           <span class="selected-count">已选 {{ selectedErrors.length }} 项</span>
         </div>
         <div class="step-body">
           <div class="fix-actions">
-            <el-button type="warning" size="large" :loading="repairing" @click="repairErrors">
+            <el-button type="warning" size="large" :loading="repairing" @click="repairErrorsNew">
               <el-icon v-if="!repairing"><Magic /></el-icon>
               AI 自动修复
             </el-button>
             <span v-if="userCredits < 200" class="pay-hint" @click="showPaymentDialog">
               <el-icon><Lock /></el-icon> 积分不足，充值后使用
             </span>
-
             <el-button size="large" @click="selectAllErrors">全选</el-button>
             <el-button size="large" @click="selectedErrors = []">清空</el-button>
           </div>
@@ -472,9 +530,11 @@
             <div v-for="(result, ridx) in repairResults" :key="ridx" class="repair-item">
               <div class="repair-file-header">
                 <span class="repair-filename">{{ result.file }}</span>
-                <el-button type="success" size="small" :disabled="result.applied" @click="applyFix(result)">
-                  {{ result.applied ? '✓ 已应用' : '应用修复' }}
-                </el-button>
+                <div style="display:flex;gap:8px;">
+                  <el-button v-if="fixMode === 'remote'" type="success" size="small" :disabled="result.applied" @click="applyFix(result)">
+                    {{ result.applied ? '✓ 已应用' : '应用修复' }}
+                  </el-button>
+                </div>
               </div>
               <div class="diff-container">
                 <div class="diff-side">
@@ -487,6 +547,12 @@
                   <pre class="diff-code fixed"><code>{{ result.fixed }}</code></pre>
                 </div>
               </div>
+            </div>
+            <!-- 上传模式下可下载修复后的ZIP -->
+            <div v-if="fixMode === 'upload' && repairResults.length > 0" style="margin-top:16px; text-align:center;">
+              <el-button type="success" size="large" @click="downloadRepairedZip">
+                📥 下载修复后的 ZIP
+              </el-button>
             </div>
           </div>
         </div>
@@ -1002,6 +1068,31 @@
       </template>
     </el-dialog>
 
+    <!-- Save to Server Dialog -->
+    <el-dialog v-model="saveToServerVisible" title="🖥️ 保存到服务器" width="480px" :close-on-click-modal="false">
+      <div v-if="servers.length === 0" style="text-align:center; padding: 20px 0;">
+        <p style="color: var(--text-secondary); margin-bottom: 16px;">暂无已配置的服务器</p>
+        <p style="color: var(--accent-orange); font-size: 13px;">请先去「免费部署」tab 配置服务器信息</p>
+      </div>
+      <div v-else>
+        <div style="margin-bottom: 16px;">
+          <label style="font-size: 13px; color: var(--text-secondary); display: block; margin-bottom: 8px;">选择服务器</label>
+          <el-select v-model="saveServerId" placeholder="选择已配置的服务器" size="large" style="width:100%">
+            <el-option v-for="(s, i) in servers" :key="i" :value="String(i)" :label="`${s.name} (${s.host})`" />
+          </el-select>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="font-size: 13px; color: var(--text-secondary); display: block; margin-bottom: 8px;">目标路径</label>
+          <el-input v-model="saveTargetPath" placeholder="/www/wwwroot/my-project/" size="large" />
+          <p style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">文件将保存到此目录下，目录不存在会自动创建</p>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="saveToServerVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saveToServerLoading" :disabled="servers.length === 0 || !saveTargetPath.trim()" @click="doSaveToServer">确认保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Footer -->
     <footer class="app-footer">
       <span>AI Auto Deploy</span>
@@ -1100,12 +1191,21 @@ export default {
         },
       },
       // Fix tab
+      fixMode: 'remote',  // 'remote' | 'upload'
       fixProjectPath: '',
+      fixServerId: '',
+      fixUploadFile: null,
+      fixTempDir: '',
       analyzing: false,
       analysisResult: null,
       selectedErrors: [],
       repairing: false,
       repairResults: [],
+      // Save to server
+      saveToServerVisible: false,
+      saveServerId: '',
+      saveTargetPath: '',
+      saveToServerLoading: false,
       // User Profile
       userProfile: {},
       userProfileLoaded: false,
@@ -1796,11 +1896,148 @@ export default {
       try {
         const res = await axios.post('/api/fix/analyze', { path: this.fixProjectPath })
         this.analysisResult = res.data
+        this.fixTempDir = res.data.temp_dir || ''
         if (res.data.total > 0) { this.$message.warning(`发现 ${res.data.total} 个问题`) }
         else { this.$message.success('未检测到问题') }
       } catch (err) {
         this.$message.error(err.response?.data?.detail || '分析失败')
       } finally { this.analyzing = false }
+    },
+    async analyzeRemoteCode() {
+      if (!this.fixServerId) { this.$message.warning('请选择服务器'); return }
+      if (!this.fixProjectPath.trim()) { this.$message.warning('请输入项目路径'); return }
+      this.analyzing = true
+      this.analysisResult = null
+      this.selectedErrors = []
+      this.repairResults = []
+      this.fixTempDir = ''
+      try {
+        const res = await axios.post('/api/fix/analyze-remote', {
+          server_id: this.fixServerId,
+          project_path: this.fixProjectPath,
+          user_id: this.userId,
+        })
+        this.analysisResult = res.data
+        this.fixTempDir = res.data.temp_dir || ''
+        if (res.data.total > 0) { this.$message.warning(`发现 ${res.data.total} 个问题`) }
+        else { this.$message.success('未检测到问题') }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '远程检测失败')
+      } finally { this.analyzing = false }
+    },
+    triggerFixZipSelect() { this.$refs.fixZipInput.click() },
+    handleFixZipSelect(e) {
+      const file = e.target.files[0]
+      if (file && file.name.endsWith('.zip')) {
+        if (file.size > 10 * 1024 * 1024) { this.$message.warning('文件不能超过 10MB'); return }
+        this.fixUploadFile = file
+      }
+    },
+    handleFixZipDrop(e) {
+      const file = e.dataTransfer.files[0]
+      if (file && file.name.endsWith('.zip')) {
+        if (file.size > 10 * 1024 * 1024) { this.$message.warning('文件不能超过 10MB'); return }
+        this.fixUploadFile = file
+      }
+    },
+    async analyzeUploadedCode() {
+      if (!this.fixUploadFile) { this.$message.warning('请先上传项目ZIP'); return }
+      this.analyzing = true
+      this.analysisResult = null
+      this.selectedErrors = []
+      this.repairResults = []
+      this.fixTempDir = ''
+      try {
+        const formData = new FormData()
+        formData.append('file', this.fixUploadFile)
+        if (this.userId) formData.append('user_id', this.userId)
+        const res = await axios.post('/api/fix/analyze-upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        this.analysisResult = res.data
+        this.fixTempDir = res.data.temp_dir || ''
+        if (res.data.total > 0) { this.$message.warning(`发现 ${res.data.total} 个问题`) }
+        else { this.$message.success('未检测到问题') }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '分析失败')
+      } finally { this.analyzing = false }
+    },
+    async repairErrorsNew() {
+      if (this.selectedErrors.length === 0) return
+      if (!(await this.requireCredits(200, '代码修复'))) return
+      this.repairing = true
+      this.repairResults = []
+      try {
+        const errors = this.selectedErrors.map(idx => this.analysisResult.errors[idx])
+        let res
+        if (this.fixMode === 'upload') {
+          res = await axios.post('/api/fix/repair-upload', {
+            temp_dir: this.fixTempDir,
+            errors: errors,
+            user_id: this.userId,
+          })
+        } else {
+          res = await axios.post('/api/fix/repair-remote', {
+            server_id: this.fixServerId,
+            project_path: this.fixProjectPath,
+            errors: errors,
+            user_id: this.userId,
+          })
+        }
+        this.repairResults = res.data.results.map(r => ({ ...r, applied: false }))
+        this.updateCreditsFromResponse(res)
+        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件，消耗 200 积分`)
+      } catch (err) {
+        if (err.response?.status === 402) {
+          this.showPaymentDialog()
+        } else {
+          this.$message.error(err.response?.data?.detail || '修复失败')
+        }
+      } finally { this.repairing = false }
+    },
+    async downloadRepairedZip() {
+      if (!this.fixTempDir) { this.$message.warning('无可下载的内容'); return }
+      try {
+        const res = await axios.post('/api/fix/download-repaired', {
+          temp_dir: this.fixTempDir,
+        }, { responseType: 'blob' })
+        const url = URL.createObjectURL(res.data)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'repaired-project.zip'
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch (err) {
+        this.$message.error('下载失败')
+      }
+    },
+    openSaveToServer() {
+      if (this.servers.length === 0) {
+        this.$message.warning('暂无已配置的服务器，请先去「免费部署」tab配置')
+        return
+      }
+      this.saveServerId = '0'
+      this.saveTargetPath = '/www/wwwroot/my-project/'
+      this.saveToServerVisible = true
+    },
+    async doSaveToServer() {
+      if (!this.saveServerId) { this.$message.warning('请选择服务器'); return }
+      if (!this.saveTargetPath.trim()) { this.$message.warning('请输入目标路径'); return }
+      this.saveToServerLoading = true
+      try {
+        const res = await axios.post('/api/generate/save-to-server', {
+          files: this.genFiles,
+          server_id: this.saveServerId,
+          target_path: this.saveTargetPath.trim(),
+          user_id: this.userId,
+        })
+        this.$message.success(res.data.message || '保存成功')
+        this.saveToServerVisible = false
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '保存失败')
+      } finally {
+        this.saveToServerLoading = false
+      }
     },
     toggleError(idx) {
       const pos = this.selectedErrors.indexOf(idx)
@@ -1914,11 +2151,148 @@ export default {
       try {
         const res = await axios.post('/api/fix/analyze', { path: this.fixProjectPath })
         this.analysisResult = res.data
+        this.fixTempDir = res.data.temp_dir || ''
         if (res.data.total > 0) { this.$message.warning(`发现 ${res.data.total} 个问题`) }
         else { this.$message.success('未检测到问题') }
       } catch (err) {
         this.$message.error(err.response?.data?.detail || '分析失败')
       } finally { this.analyzing = false }
+    },
+    async analyzeRemoteCode() {
+      if (!this.fixServerId) { this.$message.warning('请选择服务器'); return }
+      if (!this.fixProjectPath.trim()) { this.$message.warning('请输入项目路径'); return }
+      this.analyzing = true
+      this.analysisResult = null
+      this.selectedErrors = []
+      this.repairResults = []
+      this.fixTempDir = ''
+      try {
+        const res = await axios.post('/api/fix/analyze-remote', {
+          server_id: this.fixServerId,
+          project_path: this.fixProjectPath,
+          user_id: this.userId,
+        })
+        this.analysisResult = res.data
+        this.fixTempDir = res.data.temp_dir || ''
+        if (res.data.total > 0) { this.$message.warning(`发现 ${res.data.total} 个问题`) }
+        else { this.$message.success('未检测到问题') }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '远程检测失败')
+      } finally { this.analyzing = false }
+    },
+    triggerFixZipSelect() { this.$refs.fixZipInput.click() },
+    handleFixZipSelect(e) {
+      const file = e.target.files[0]
+      if (file && file.name.endsWith('.zip')) {
+        if (file.size > 10 * 1024 * 1024) { this.$message.warning('文件不能超过 10MB'); return }
+        this.fixUploadFile = file
+      }
+    },
+    handleFixZipDrop(e) {
+      const file = e.dataTransfer.files[0]
+      if (file && file.name.endsWith('.zip')) {
+        if (file.size > 10 * 1024 * 1024) { this.$message.warning('文件不能超过 10MB'); return }
+        this.fixUploadFile = file
+      }
+    },
+    async analyzeUploadedCode() {
+      if (!this.fixUploadFile) { this.$message.warning('请先上传项目ZIP'); return }
+      this.analyzing = true
+      this.analysisResult = null
+      this.selectedErrors = []
+      this.repairResults = []
+      this.fixTempDir = ''
+      try {
+        const formData = new FormData()
+        formData.append('file', this.fixUploadFile)
+        if (this.userId) formData.append('user_id', this.userId)
+        const res = await axios.post('/api/fix/analyze-upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        this.analysisResult = res.data
+        this.fixTempDir = res.data.temp_dir || ''
+        if (res.data.total > 0) { this.$message.warning(`发现 ${res.data.total} 个问题`) }
+        else { this.$message.success('未检测到问题') }
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '分析失败')
+      } finally { this.analyzing = false }
+    },
+    async repairErrorsNew() {
+      if (this.selectedErrors.length === 0) return
+      if (!(await this.requireCredits(200, '代码修复'))) return
+      this.repairing = true
+      this.repairResults = []
+      try {
+        const errors = this.selectedErrors.map(idx => this.analysisResult.errors[idx])
+        let res
+        if (this.fixMode === 'upload') {
+          res = await axios.post('/api/fix/repair-upload', {
+            temp_dir: this.fixTempDir,
+            errors: errors,
+            user_id: this.userId,
+          })
+        } else {
+          res = await axios.post('/api/fix/repair-remote', {
+            server_id: this.fixServerId,
+            project_path: this.fixProjectPath,
+            errors: errors,
+            user_id: this.userId,
+          })
+        }
+        this.repairResults = res.data.results.map(r => ({ ...r, applied: false }))
+        this.updateCreditsFromResponse(res)
+        this.$message.success(`AI 修复完成，共 ${this.repairResults.length} 个文件，消耗 200 积分`)
+      } catch (err) {
+        if (err.response?.status === 402) {
+          this.showPaymentDialog()
+        } else {
+          this.$message.error(err.response?.data?.detail || '修复失败')
+        }
+      } finally { this.repairing = false }
+    },
+    async downloadRepairedZip() {
+      if (!this.fixTempDir) { this.$message.warning('无可下载的内容'); return }
+      try {
+        const res = await axios.post('/api/fix/download-repaired', {
+          temp_dir: this.fixTempDir,
+        }, { responseType: 'blob' })
+        const url = URL.createObjectURL(res.data)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'repaired-project.zip'
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch (err) {
+        this.$message.error('下载失败')
+      }
+    },
+    openSaveToServer() {
+      if (this.servers.length === 0) {
+        this.$message.warning('暂无已配置的服务器，请先去「免费部署」tab配置')
+        return
+      }
+      this.saveServerId = '0'
+      this.saveTargetPath = '/www/wwwroot/my-project/'
+      this.saveToServerVisible = true
+    },
+    async doSaveToServer() {
+      if (!this.saveServerId) { this.$message.warning('请选择服务器'); return }
+      if (!this.saveTargetPath.trim()) { this.$message.warning('请输入目标路径'); return }
+      this.saveToServerLoading = true
+      try {
+        const res = await axios.post('/api/generate/save-to-server', {
+          files: this.genFiles,
+          server_id: this.saveServerId,
+          target_path: this.saveTargetPath.trim(),
+          user_id: this.userId,
+        })
+        this.$message.success(res.data.message || '保存成功')
+        this.saveToServerVisible = false
+      } catch (err) {
+        this.$message.error(err.response?.data?.detail || '保存失败')
+      } finally {
+        this.saveToServerLoading = false
+      }
     },
     toggleError(idx) {
       const pos = this.selectedErrors.indexOf(idx)
@@ -2276,6 +2650,15 @@ export default {
 .editcode-editor :deep(textarea) { font-family: 'JetBrains Mono', 'Fira Code', monospace !important; font-size: 13px !important; line-height: 1.6 !important; background: var(--terminal-bg) !important; color: var(--terminal-green) !important; border: 1px solid var(--border-color) !important; border-radius: 8px !important; padding: 16px !important; }
 .editcode-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
 
+/* Fix Mode Tabs */
+.fix-mode-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.fix-mode-card { border: 2px solid var(--border-color); border-radius: 12px; padding: 24px 16px; text-align: center; cursor: pointer; transition: all 0.3s; background: var(--bg-tertiary); }
+.fix-mode-card:hover { border-color: var(--accent-orange); background: rgba(210, 153, 34, 0.04); }
+.fix-mode-card.active { border-color: var(--accent-orange); background: rgba(210, 153, 34, 0.08); box-shadow: 0 0 16px rgba(210, 153, 34, 0.15); }
+.fix-mode-icon { font-size: 36px; margin-bottom: 8px; }
+.fix-mode-label { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.fix-mode-desc { font-size: 12px; color: var(--text-secondary); }
+
 /* Responsive */
 @media (max-width: 600px) {
   .app-container { padding: 0 12px; }
@@ -2286,6 +2669,7 @@ export default {
   .header-right { flex-direction: column; align-items: flex-end; gap: 8px; }
   .payment-plans { flex-direction: column; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .fix-mode-tabs { grid-template-columns: 1fr; }
 }
 
 /* PWA Install Button */
