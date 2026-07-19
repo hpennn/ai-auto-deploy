@@ -69,7 +69,7 @@
             </el-popover>
           </template>
           <el-button v-else text size="small" type="primary" @click="loginMode = 'login'; loginDialogVisible = true">登录</el-button>
-          <el-tag v-if="!isLoggedIn" type="warning" effect="plain" round class="vip-tag" @click="showPaymentDialog">
+          <el-tag v-show="false" type="warning" effect="plain" round class="vip-tag" @click="showPaymentDialog">
             💎 充值积分
           </el-tag>
           <button v-if="showInstallBtn" @click="installPWA" class="pwa-install-btn">
