@@ -131,7 +131,7 @@
             <div class="envsetup-cmd-block">
               <div class="envsetup-cmd-header">
                 <span class="envsetup-cmd-label">国内加速（GitHub 代理）</span>
-                <el-button text size="small" @click="copyCode('git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"')">📋 复制</el-button>
+                <el-button text size="small" @click="copyCode(gitProxyCmd)">📋 复制</el-button>
               </div>
               <pre class="envsetup-code"><code>git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"</code></pre>
             </div>
@@ -165,10 +165,7 @@
             <div class="envsetup-cmd-block">
               <div class="envsetup-cmd-header">
                 <span class="envsetup-cmd-label">国内镜像加速（daemon.json）</span>
-                <el-button text size="small" @click="copyCode('mkdir -p /etc/docker && cat > /etc/docker/daemon.json << EOF
-{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
-EOF
-systemctl restart docker')">📋 复制</el-button>
+                <el-button size="small" @click="copyCode(dockerMirrorCmd)">📋 复制</el-button>
               </div>
               <pre class="envsetup-code"><code>mkdir -p /etc/docker && cat > /etc/docker/daemon.json &lt;&lt; EOF
 {"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
@@ -195,10 +192,7 @@ systemctl restart docker</code></pre>
             <div class="envsetup-cmd-block">
               <div class="envsetup-cmd-header">
                 <span class="envsetup-cmd-label">nvm 安装（推荐）</span>
-                <el-button text size="small" @click="copyCode('curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-source ~/.bashrc
-nvm install 22
-nvm use 22')">📋 复制</el-button>
+                <el-button size="small" @click="copyCode(nvmInstallCmd)">📋 复制</el-button>
               </div>
               <pre class="envsetup-code"><code>curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 source ~/.bashrc
@@ -279,25 +273,7 @@ nvm use 22</code></pre>
             <div class="envsetup-cmd-block">
               <div class="envsetup-cmd-header">
                 <span class="envsetup-cmd-label">完整安装脚本</span>
-                <el-button type="primary" size="small" @click="copyCode('# 更新系统 + 安装基础工具
-apt update && apt upgrade -y
-apt install -y git curl wget vim zip unzip
-
-# 安装 Docker
-curl -fsSL https://get.docker.com | sh
-
-# Docker Compose
-curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
-
-# Docker国内镜像
-mkdir -p /etc/docker && cat > /etc/docker/daemon.json << EOF
-{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
-EOF
-systemctl restart docker
-
-# Node.js 22
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs
-npm config set registry https://registry.npmmirror.com')">📋 复制全部</el-button>
+                <el-button type="primary" size="small" @click="copyCode(cloudSetupScript)">📋 复制</el-button>
               </div>
               <pre class="envsetup-code envsetup-code-long"><code># 更新系统 + 安装基础工具
 apt update && apt upgrade -y
@@ -1436,6 +1412,34 @@ export default {
     return {
       activeTab: 'deploy',
       envsetupSubTab: 'local',
+      gitProxyCmd: 'git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"',
+      dockerMirrorCmd: `mkdir -p /etc/docker && cat > /etc/docker/daemon.json << EOF
+{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
+EOF
+systemctl restart docker`,
+      nvmInstallCmd: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm use 22`,
+      cloudSetupScript: `# 更新系统 + 安装基础工具
+apt update && apt upgrade -y
+apt install -y git curl wget vim zip unzip
+
+# 安装 Docker
+curl -fsSL https://get.docker.com | sh
+
+# Docker Compose
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+
+# Docker国内镜像
+mkdir -p /etc/docker && cat > /etc/docker/daemon.json << EOF
+{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
+EOF
+systemctl restart docker
+
+# Node.js 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs
+npm config set registry https://registry.npmmirror.com`,
       // PWA
       showInstallBtn: false,
       deferredPrompt: null,
