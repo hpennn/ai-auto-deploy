@@ -9,6 +9,9 @@
       </div>
       <div class="header-right">
         <div class="tab-bar">
+          <button class="tab-btn" :class="{ active: activeTab === 'envsetup' }" @click="activeTab = 'envsetup'">
+            🔨 环境搭建
+          </button>
           <button class="tab-btn" :class="{ active: activeTab === 'deploy' }" @click="activeTab = 'deploy'">
              免费部署
           </button>
@@ -78,6 +81,281 @@
         </div>
       </div>
     </header>
+
+    <!-- ============ 环境搭建 Tab ============ -->
+    <main v-if="activeTab === 'envsetup'" class="main-content">
+      <!-- 子Tab切换 -->
+      <div class="envsetup-subtab-bar">
+        <button class="subtab-btn" :class="{ active: envsetupSubTab === 'local' }" @click="envsetupSubTab = 'local'">💻 本地环境</button>
+        <button class="subtab-btn" :class="{ active: envsetupSubTab === 'cloud' }" @click="envsetupSubTab = 'cloud'">☁️ 云端环境</button>
+      </div>
+
+      <!-- ===== 本地环境 ===== -->
+      <div v-if="envsetupSubTab === 'local'">
+
+        <!-- Git 安装 -->
+        <section class="step-section envsetup-section">
+          <div class="step-header">
+            <span class="step-num">🔧</span>
+            <span class="step-title">Git 安装</span>
+          </div>
+          <div class="step-body">
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">Windows (winget)</span>
+                <el-button text size="small" @click="copyCode('winget install Git.Git')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>winget install Git.Git</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">macOS (Homebrew)</span>
+                <el-button text size="small" @click="copyCode('brew install git')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>brew install git</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">Linux (apt)</span>
+                <el-button text size="small" @click="copyCode('sudo apt install git')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>sudo apt install git</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">Linux (yum)</span>
+                <el-button text size="small" @click="copyCode('sudo yum install git')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>sudo yum install git</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">国内加速（GitHub 代理）</span>
+                <el-button text size="small" @click="copyCode('git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">验证安装</span>
+                <el-button text size="small" @click="copyCode('git --version')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>git --version</code></pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- Docker 安装 -->
+        <section class="step-section envsetup-section">
+          <div class="step-header">
+            <span class="step-num">🐳</span>
+            <span class="step-title">Docker 安装</span>
+          </div>
+          <div class="step-body">
+            <div class="envsetup-tip">
+              <strong>Mac / Windows：</strong>前往 <a href="https://www.docker.com/products/docker-desktop" target="_blank" style="color: var(--accent-blue);">Docker Desktop 官网</a> 下载安装
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">Linux 一键安装</span>
+                <el-button text size="small" @click="copyCode('curl -fsSL https://get.docker.com | sh')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>curl -fsSL https://get.docker.com | sh</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">国内镜像加速（daemon.json）</span>
+                <el-button text size="small" @click="copyCode('mkdir -p /etc/docker && cat > /etc/docker/daemon.json << EOF
+{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
+EOF
+systemctl restart docker')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>mkdir -p /etc/docker && cat > /etc/docker/daemon.json &lt;&lt; EOF
+{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
+EOF
+systemctl restart docker</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">验证安装</span>
+                <el-button text size="small" @click="copyCode('docker --version && docker-compose --version')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>docker --version && docker-compose --version</code></pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- Node.js 安装 -->
+        <section class="step-section envsetup-section">
+          <div class="step-header">
+            <span class="step-num">📦</span>
+            <span class="step-title">Node.js 安装</span>
+          </div>
+          <div class="step-body">
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">nvm 安装（推荐）</span>
+                <el-button text size="small" @click="copyCode('curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm use 22')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm use 22</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">npm 国内镜像</span>
+                <el-button text size="small" @click="copyCode('npm config set registry https://registry.npmmirror.com')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>npm config set registry https://registry.npmmirror.com</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">验证安装</span>
+                <el-button text size="small" @click="copyCode('node -v && npm -v')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>node -v && npm -v</code></pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- Python 安装 -->
+        <section class="step-section envsetup-section">
+          <div class="step-header">
+            <span class="step-num">🐍</span>
+            <span class="step-title">Python 安装</span>
+          </div>
+          <div class="step-body">
+            <div class="envsetup-tip">
+              <strong>Windows：</strong>前往 <a href="https://www.python.org/downloads/" target="_blank" style="color: var(--accent-blue);">Python 官网</a> 下载安装包，安装时勾选 "Add Python to PATH"
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">macOS (Homebrew)</span>
+                <el-button text size="small" @click="copyCode('brew install python@3.12')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>brew install python@3.12</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">Linux (apt)</span>
+                <el-button text size="small" @click="copyCode('sudo apt install python3 python3-pip python3-venv')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>sudo apt install python3 python3-pip python3-venv</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">pip 国内镜像（清华源）</span>
+                <el-button text size="small" @click="copyCode('pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple</code></pre>
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">验证安装</span>
+                <el-button text size="small" @click="copyCode('python3 --version')">📋 复制</el-button>
+              </div>
+              <pre class="envsetup-code"><code>python3 --version</code></pre>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- ===== 云端环境 ===== -->
+      <div v-if="envsetupSubTab === 'cloud'">
+        <section class="step-section envsetup-section">
+          <div class="step-header">
+            <span class="step-num">☁️</span>
+            <span class="step-title">云端一键安装脚本</span>
+          </div>
+          <div class="step-body">
+            <div class="envsetup-tip">
+              适用于 Ubuntu / Debian 等基于 apt 的 Linux 服务器，复制以下脚本在服务器终端执行即可完成全部环境搭建。
+            </div>
+            <div class="envsetup-cmd-block">
+              <div class="envsetup-cmd-header">
+                <span class="envsetup-cmd-label">完整安装脚本</span>
+                <el-button type="primary" size="small" @click="copyCode('# 更新系统 + 安装基础工具
+apt update && apt upgrade -y
+apt install -y git curl wget vim zip unzip
+
+# 安装 Docker
+curl -fsSL https://get.docker.com | sh
+
+# Docker Compose
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+
+# Docker国内镜像
+mkdir -p /etc/docker && cat > /etc/docker/daemon.json << EOF
+{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
+EOF
+systemctl restart docker
+
+# Node.js 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs
+npm config set registry https://registry.npmmirror.com')">📋 复制全部</el-button>
+              </div>
+              <pre class="envsetup-code envsetup-code-long"><code># 更新系统 + 安装基础工具
+apt update && apt upgrade -y
+apt install -y git curl wget vim zip unzip
+
+# 安装 Docker
+curl -fsSL https://get.docker.com | sh
+
+# Docker Compose
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+
+# Docker国内镜像
+mkdir -p /etc/docker && cat > /etc/docker/daemon.json &lt;&lt; EOF
+{"registry-mirrors":["https://docker.1ms.run","https://docker.xuanyuan.me"]}
+EOF
+systemctl restart docker
+
+# Node.js 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs
+npm config set registry https://registry.npmmirror.com</code></pre>
+            </div>
+
+            <!-- 分步说明 -->
+            <div class="envsetup-step-list">
+              <div class="envsetup-step-item">
+                <span class="envsetup-step-badge">1</span>
+                <div>
+                  <strong>更新系统 &amp; 基础工具</strong>
+                  <p style="color: var(--text-secondary); font-size: 13px; margin: 4px 0 0;">安装 git、curl、wget、vim、zip、unzip 等常用工具</p>
+                </div>
+              </div>
+              <div class="envsetup-step-item">
+                <span class="envsetup-step-badge">2</span>
+                <div>
+                  <strong>安装 Docker &amp; Docker Compose</strong>
+                  <p style="color: var(--text-secondary); font-size: 13px; margin: 4px 0 0;">一键脚本安装 Docker 引擎，手动安装 docker-compose 二进制</p>
+                </div>
+              </div>
+              <div class="envsetup-step-item">
+                <span class="envsetup-step-badge">3</span>
+                <div>
+                  <strong>配置 Docker 国内镜像</strong>
+                  <p style="color: var(--text-secondary); font-size: 13px; margin: 4px 0 0;">写入 daemon.json 配置镜像加速，重启 Docker 生效</p>
+                </div>
+              </div>
+              <div class="envsetup-step-item">
+                <span class="envsetup-step-badge">4</span>
+                <div>
+                  <strong>安装 Node.js 22</strong>
+                  <p style="color: var(--text-secondary); font-size: 13px; margin: 4px 0 0;">通过 NodeSource 官方源安装 Node.js 22 LTS，配置 npm 国内镜像</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </main>
 
     <!-- ============ 部署 Tab ============ -->
     <main v-if="activeTab === 'deploy'" class="main-content">
@@ -1157,6 +1435,7 @@ export default {
   data() {
     return {
       activeTab: 'deploy',
+      envsetupSubTab: 'local',
       // PWA
       showInstallBtn: false,
       deferredPrompt: null,
@@ -2477,6 +2756,15 @@ export default {
         this.$message.success('已复制修改后的代码')
       }
     },
+
+    // ===== Env Setup Tab =====
+    copyCode(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        this.$message.success('已复制到剪贴板')
+      }).catch(() => {
+        this.$message.error('复制失败，请手动复制')
+      })
+    },
   },
 }
 </script>
@@ -2816,5 +3104,19 @@ export default {
 .pwa-install-btn:hover {
   background: rgba(88, 166, 255, 0.2);
 }
+
+
+/* ===== 环境搭建 Tab ===== */
+.envsetup-subtab-bar { display: flex; gap: 4px; background: var(--bg-tertiary); border-radius: 8px; padding: 3px; margin-bottom: 20px; }
+.envsetup-section { margin-bottom: 16px; }
+.envsetup-cmd-block { margin-bottom: 12px; }
+.envsetup-cmd-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.envsetup-cmd-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.envsetup-code { margin: 0; padding: 12px 16px; background: var(--terminal-bg); border: 1px solid var(--border-color); border-radius: 8px; font-size: 13px; line-height: 1.6; color: var(--terminal-green); font-family: 'JetBrains Mono', 'Fira Code', monospace; white-space: pre-wrap; word-break: break-all; overflow-x: auto; }
+.envsetup-code-long { max-height: 480px; overflow-y: auto; }
+.envsetup-tip { padding: 10px 14px; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.2); border-radius: 8px; font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.6; }
+.envsetup-step-list { margin-top: 20px; display: flex; flex-direction: column; gap: 12px; }
+.envsetup-step-item { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; background: var(--bg-tertiary); border-radius: 8px; }
+.envsetup-step-badge { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-orange); color: #fff; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 
 </style>
