@@ -1,33 +1,41 @@
 <template>
   <div class="app-container">
-    <!-- Header -->
-    <header class="app-header">
-      <div class="header-left" @click="logoClickCount++">
+    <!-- Sidebar -->
+    <aside class="app-sidebar" :class="{ 'sidebar-open': mobileSidebarOpen }">
+      <div class="sidebar-header" @click="logoClickCount++">
         <span class="logo">🚀</span>
-        <h1>AI项目自动部署</h1>
-        <span class="version">v1.2</span>
-      </div>
-      <div class="header-right">
-        <div class="tab-bar">
-          <button class="tab-btn" :class="{ active: activeTab === 'envsetup' }" @click="activeTab = 'envsetup'">
-            🔨 环境搭建
-          </button>
-          <button class="tab-btn" :class="{ active: activeTab === 'deploy' }" @click="activeTab = 'deploy'">
-             免费部署
-          </button>
-          <button class="tab-btn" :class="{ active: activeTab === 'generate' }" @click="activeTab = 'generate'">
-            ✨ 生成项目
-          </button>
-          <button class="tab-btn" :class="{ active: activeTab === 'fix' }" @click="activeTab = 'fix'">
-            🔧 代码检测
-          </button>
-          <button class="tab-btn" :class="{ active: activeTab === 'editcode' }" @click="activeTab = 'editcode'">
-            🛠 代码修改
-          </button>
-          <button v-if="isAdmin" class="tab-btn admin-tab" :class="{ active: activeTab === 'admin' }" @click="activeTab = 'admin'">
-            🛡️ 管理后台
-          </button>
+        <div class="sidebar-title-group">
+          <h1>AI项目自动部署</h1>
+          <span class="version">v1.2</span>
         </div>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="sidebar-nav-item" :class="{ active: activeTab === 'envsetup' }" @click="activeTab = 'envsetup'; mobileSidebarOpen = false">
+          <span class="nav-icon">🔨</span>
+          <span class="nav-text">环境搭建</span>
+        </button>
+        <button class="sidebar-nav-item" :class="{ active: activeTab === 'deploy' }" @click="activeTab = 'deploy'; mobileSidebarOpen = false">
+          <span class="nav-icon">📦</span>
+          <span class="nav-text">免费部署</span>
+        </button>
+        <button class="sidebar-nav-item" :class="{ active: activeTab === 'generate' }" @click="activeTab = 'generate'; mobileSidebarOpen = false">
+          <span class="nav-icon">✨</span>
+          <span class="nav-text">生成项目</span>
+        </button>
+        <button class="sidebar-nav-item" :class="{ active: activeTab === 'fix' }" @click="activeTab = 'fix'; mobileSidebarOpen = false">
+          <span class="nav-icon">🔧</span>
+          <span class="nav-text">代码检测</span>
+        </button>
+        <button class="sidebar-nav-item" :class="{ active: activeTab === 'editcode' }" @click="activeTab = 'editcode'; mobileSidebarOpen = false">
+          <span class="nav-icon">🛠</span>
+          <span class="nav-text">代码修改</span>
+        </button>
+        <button v-if="isAdmin" class="sidebar-nav-item admin-item" :class="{ active: activeTab === 'admin' }" @click="activeTab = 'admin'; mobileSidebarOpen = false">
+          <span class="nav-icon">🛡️</span>
+          <span class="nav-text">管理后台</span>
+        </button>
+      </nav>
+      <div class="sidebar-footer">
         <div class="header-actions">
           <template v-if="isLoggedIn">
             <el-popover placement="bottom-end" :width="320" trigger="click" @show="loadUserProfile">
@@ -80,7 +88,15 @@
           </button>
         </div>
       </div>
-    </header>
+    </aside>
+    <!-- Mobile sidebar overlay -->
+    <div v-if="mobileSidebarOpen" class="sidebar-overlay" @click="mobileSidebarOpen = false"></div>
+    <!-- Mobile menu toggle -->
+    <button class="mobile-menu-toggle" @click="mobileSidebarOpen = !mobileSidebarOpen">
+      <span class="hamburger-icon">☰</span>
+    </button>
+    <!-- Right content area -->
+    <div class="app-main">
 
     <!-- ============ 环境搭建 Tab ============ -->
     <main v-if="activeTab === 'envsetup'" class="main-content">
@@ -1400,6 +1416,7 @@ npm config set registry https://registry.npmmirror.com</code></pre>
       <span class="separator">·</span>
       <span>智能识别 · 一键部署 · 代码检测 · 自动修复 · AI 生成</span>
     </footer>
+    </div>
   </div>
 </template>
 
@@ -1411,6 +1428,7 @@ export default {
   data() {
     return {
       activeTab: 'deploy',
+      mobileSidebarOpen: false,
       envsetupSubTab: 'local',
       gitProxyCmd: 'git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"',
       dockerMirrorCmd: `mkdir -p /etc/docker && cat > /etc/docker/daemon.json << EOF
@@ -2774,29 +2792,82 @@ npm config set registry https://registry.npmmirror.com`,
 </script>
 
 <style scoped>
-.app-container { min-height: 100vh; display: flex; flex-direction: column; max-width: 960px; margin: 0 auto; padding: 0 24px; }
+.app-container { min-height: 100vh; display: flex; flex-direction: row; }
 
-/* Header */
-.app-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 0; border-bottom: 1px solid var(--border-color); }
-.header-left { display: flex; align-items: center; gap: 12px; cursor: default; user-select: none; }
-.header-right { display: flex; align-items: center; gap: 16px; }
-.logo { font-size: 28px; }
-.header-left h1 { font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.5px; }
-.version { font-size: 12px; color: var(--text-secondary); background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px; }
-.header-actions { display: flex; align-items: center; gap: 8px; }
+/* Sidebar */
+.app-sidebar {
+  width: 220px;
+  min-width: 220px;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  z-index: 1000;
+}
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px;
+  cursor: default;
+  user-select: none;
+  border-bottom: 1px solid var(--border-color);
+}
+.sidebar-title-group { display: flex; flex-direction: column; gap: 2px; }
+.logo { font-size: 26px; }
+.sidebar-header h1 { font-size: 16px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.3px; margin: 0; line-height: 1.3; }
+.version { font-size: 11px; color: var(--text-secondary); background: var(--bg-tertiary); padding: 1px 8px; border-radius: 10px; align-self: flex-start; }
+
+/* Sidebar Navigation */
+.sidebar-nav { display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; flex: 1; }
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+}
+.sidebar-nav-item:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.04); }
+.sidebar-nav-item.active {
+  background: rgba(210, 153, 34, 0.12);
+  color: var(--accent-orange);
+  font-weight: 600;
+}
+.sidebar-nav-item.active .nav-icon { transform: scale(1.1); }
+.nav-icon { font-size: 16px; flex-shrink: 0; transition: transform 0.2s; }
+.nav-text { white-space: nowrap; }
+.sidebar-nav-item.admin-item { color: var(--accent-orange); }
+.sidebar-nav-item.admin-item.active { background: rgba(210, 153, 34, 0.15); color: var(--accent-orange); }
+
+/* Sidebar Footer */
+.sidebar-footer { padding: 12px 8px; border-top: 1px solid var(--border-color); }
+.header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .vip-tag { cursor: pointer; transition: all 0.2s; }
 .vip-tag:hover { transform: scale(1.05); }
 
-/* Tab Bar */
-.tab-bar { display: flex; gap: 4px; background: var(--bg-tertiary); border-radius: 8px; padding: 3px; }
-.tab-btn { padding: 6px 16px; border: none; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
-.tab-btn:hover { color: var(--text-primary); }
-.tab-btn.active { background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-.admin-tab { color: var(--accent-orange); }
-.admin-tab.active { background: rgba(210, 153, 34, 0.15); color: var(--accent-orange); }
+/* Mobile overlay & toggle */
+.sidebar-overlay { display: none; }
+.mobile-menu-toggle { display: none; }
+
+/* Right Content Area */
+.app-main { flex: 1; min-width: 0; padding: 0 24px; display: flex; flex-direction: column; }
 
 /* Main */
-.main-content { flex: 1; padding: 24px 0; display: flex; flex-direction: column; gap: 20px; }
+.main-content { flex: 1; padding: 24px 0; display: flex; flex-direction: column; gap: 20px; max-width: 1200px; width: 100%; }
 
 /* Step Section */
 .step-section { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
@@ -3081,15 +3152,56 @@ npm config set registry https://registry.npmmirror.com`,
 
 /* Responsive */
 @media (max-width: 600px) {
-  .app-container { padding: 0 12px; }
+  .app-main { padding: 0 12px; }
   .info-grid { grid-template-columns: 1fr; }
   .config-row { flex-direction: column; }
   .diff-container { flex-direction: column; }
   .diff-divider { width: auto; height: 1px; }
-  .header-right { flex-direction: column; align-items: flex-end; gap: 8px; }
   .payment-plans { flex-direction: column; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .fix-mode-tabs { grid-template-columns: 1fr; }
+}
+
+/* Sidebar Responsive - Mobile (<768px) */
+@media (max-width: 768px) {
+  .app-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  }
+  .app-sidebar.sidebar-open { transform: translateX(0); }
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+  }
+  .mobile-menu-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 1001;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 18px;
+    transition: all 0.2s;
+  }
+  .mobile-menu-toggle:hover { background: var(--bg-tertiary); }
+  .hamburger-icon { line-height: 1; }
+  .app-main { padding-top: 56px; }
+  .sidebar-header h1 { font-size: 15px; }
 }
 
 /* PWA Install Button */
