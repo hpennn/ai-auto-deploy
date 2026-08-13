@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  ai-auto-deploy:
+    build: .
+    container_name: ai-auto-deploy
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据库
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
