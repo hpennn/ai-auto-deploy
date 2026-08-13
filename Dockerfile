@@ -1,13 +1,3 @@
-# Stage 1: Build frontend
-FROM node:18-alpine AS frontend-builder
-
-WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install --registry=https://registry.npmmirror.com
-COPY frontend/ ./
-RUN npm run build
-
-# Stage 2: Python backend
 FROM python:3.11-slim
 
 # Non-root user
@@ -24,8 +14,8 @@ COPY web/ ./web/
 COPY src/ ./src/
 COPY deploy.py pyproject.toml README.md ./
 
-# Copy built frontend from stage 1
-COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+# Copy pre-built frontend (already built in repo)
+COPY frontend/dist ./frontend/dist
 
 # Copy public assets
 COPY public/ ./public/
