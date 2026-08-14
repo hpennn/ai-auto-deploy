@@ -24,11 +24,11 @@ COPY public/ ./public/
 RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
 
 # Switch to non-root user
-USER appuser
+USER root
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+    CMD wget -qO- http://localhost:8000/api/health || exit 1
 
 EXPOSE 8000
 
