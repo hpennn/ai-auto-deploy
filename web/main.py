@@ -22,6 +22,7 @@ from web.api.generate import router as generate_router
 from web.api.payment import router as payment_router
 from web.api.admin import router as admin_router
 from web.api.auth import router as auth_router
+from web.api.local_agent import router as local_agent_router
 
 app = FastAPI(
     title="AI Auto Deploy",
@@ -46,6 +47,7 @@ app.include_router(generate_router, prefix="/api/generate", tags=["generate"])
 app.include_router(payment_router, prefix="/api/payment", tags=["payment"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(local_agent_router, prefix="/api/local-agent", tags=["local-agent"])
 
 
 @app.get("/api/health")

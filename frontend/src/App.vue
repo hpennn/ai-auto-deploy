@@ -30,6 +30,10 @@
           <span class="nav-icon">🛠</span>
           <span class="nav-text">代码修改</span>
         </button>
+        <button class="sidebar-nav-item" :class="{ active: activeTab === 'localagent' }" @click="activeTab = 'localagent'; mobileSidebarOpen = false">
+          <span class="nav-icon">🤖</span>
+          <span class="nav-text">本地Agent</span>
+        </button>
         <button v-if="isAdmin" class="sidebar-nav-item admin-item" :class="{ active: activeTab === 'admin' }" @click="activeTab = 'admin'; mobileSidebarOpen = false">
           <span class="nav-icon">🛡️</span>
           <span class="nav-text">管理后台</span>
@@ -973,6 +977,120 @@ npm config set registry https://registry.npmmirror.com</code></pre>
       </section>
     </main>
 
+    <!-- ============ 本地Agent部署 Tab ============ -->
+    <main v-if="activeTab === 'localagent'" class="main-content">
+      <div class="section-header">
+        <h2>🤖 本地 Agent 部署</h2>
+        <p class="section-desc">选择适合你的方式，在本地部署 Coze Agent</p>
+      </div>
+
+      <!-- 方案选择 -->
+      <div v-if="!selectedLocalAgentMethod" class="method-cards">
+        <div v-for="m in localAgentMethods" :key="m.id" class="method-card" @click="selectLocalAgentMethod(m.id)">
+          <div class="method-icon">{{ m.icon }}</div>
+          <h3>{{ m.name }}</h3>
+          <div class="method-meta">
+            <span class="method-difficulty" :class="'diff-' + m.difficulty">{{ m.difficultyLabel }}</span>
+            <span class="method-time">⏱ {{ m.time }}</span>
+          </div>
+          <p class="method-desc">{{ m.desc }}</p>
+          <ul class="method-pros">
+            <li v-for="p in m.pros" :key="p">✅ {{ p }}</li>
+          </ul>
+          <div class="method-suitable">适合：{{ m.suitable }}</div>
+        </div>
+      </div>
+
+      <!-- 方案详情 -->
+      <div v-else>
+        <button class="back-btn" @click="selectedLocalAgentMethod = null; localAgentScript = ''; localAgentGenerating = false">← 返回方案选择</button>
+        <div class="method-detail-header">
+          <h3>{{ getSelectedMethodInfo().icon }} {{ getSelectedMethodInfo().name }}</h3>
+        </div>
+
+        <!-- 硬件/环境要求 -->
+        <div class="form-section">
+          <h4>📋 环境要求</h4>
+          <div class="hw-requirements">
+            <span v-for="r in getSelectedMethodInfo().requirements" :key="r">📌 {{ r }}</span>
+          </div>
+        </div>
+
+        <!-- 配置表单 -->
+        <div class="form-section">
+          <h4>⚙️ 部署配置</h4>
+          <div class="env-tags">
+            <div v-for="env in getSelectedMethodInfo().envs" :key="env.key" class="env-tag-item">
+              <label>{{ env.label }}</label>
+              <input v-model="localAgentConfig[env.key]" :placeholder="env.placeholder" class="env-input" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 部署步骤 -->
+        <div class="form-section">
+          <h4>📝 部署步骤</h4>
+          <div class="steps-list">
+            <div v-for="(step, i) in getSelectedMethodInfo().steps" :key="i" class="step-item">
+              <span class="step-num">{{ i + 1 }}</span>
+              <span>{{ step }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 生成脚本 -->
+        <div class="form-actions">
+          <el-button type="primary" size="large" @click="generateLocalAgentScript" :loading="localAgentGenerating">
+            🚀 生成部署脚本
+          </el-button>
+        </div>
+
+        <!-- 脚本输出 -->
+        <div v-if="localAgentScript" class="script-output-section">
+          <div class="output-header">
+            <h4>📜 部署脚本</h4>
+            <div class="output-actions">
+              <el-button size="small" @click="copyLocalAgentScript">📋 复制</el-button>
+              <el-button size="small" type="primary" @click="downloadLocalAgentScript">📥 下载</el-button>
+            </div>
+          </div>
+          <pre class="script-content">{{ localAgentScript }}</pre>
+        </div>
+      </div>
+
+      <!-- 环境安装指南入口 -->
+      <div class="form-section" style="margin-top: 30px;">
+        <h4>🔧 环境安装指南</h4>
+        <div class="install-grid">
+          <div class="install-card" @click="showInstallGuide('docker')">
+            <div class="install-icon">🐳</div>
+            <h4>Docker</h4>
+            <p>容器运行环境</p>
+          </div>
+          <div class="install-card" @click="showInstallGuide('git')">
+            <div class="install-icon">📦</div>
+            <h4>Git</h4>
+            <p>版本控制工具</p>
+          </div>
+          <div class="install-card" @click="showInstallGuide('coze')">
+            <div class="install-icon">🤖</div>
+            <h4>Coze 桌面端</h4>
+            <p>扣子客户端</p>
+          </div>
+          <div class="install-card" @click="showInstallGuide('python')">
+            <div class="install-icon">🐍</div>
+            <h4>Python</h4>
+            <p>Python 运行环境</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 环境安装指南弹窗 -->
+      <el-dialog v-model="installGuideVisible" :title="installGuideTitle" width="600px">
+        <div class="install-guide-content" v-html="installGuideContent"></div>
+      </el-dialog>
+    </main>
+
     <!-- ============ 管理后台 Tab ============ -->
     <main v-if="activeTab === 'admin' && isAdmin" class="main-content">
       <!-- Admin Sub-tabs -->
@@ -1589,6 +1707,99 @@ npm config set registry https://registry.npmmirror.com`,
       adminAddCreditAmount: 1000,
       adminAddCreditDesc: '',
       adminAddCreditLoading: false,
+
+      // ===== 本地Agent部署 =====
+      selectedLocalAgentMethod: null,
+      localAgentConfig: {
+        project_name: '',
+        project_path: '',
+        agent_name: '',
+        api_key: '',
+        port: '8080',
+        docker_image: 'coze/coze-studio:latest',
+      },
+      localAgentScript: '',
+      localAgentGenerating: false,
+      installGuideVisible: false,
+      installGuideTitle: '',
+      installGuideContent: '',
+      localAgentMethods: [
+        {
+          id: 'coze_desktop',
+          icon: '🖥️',
+          name: 'Coze 桌面客户端',
+          difficulty: 'easy',
+          difficultyLabel: '简单',
+          time: '5-10分钟',
+          desc: '通过 Coze 官方桌面客户端，直接绑定本地设备运行 Agent，零代码部署。',
+          pros: ['官方支持，稳定可靠', '零代码配置', '自动更新', '支持绑定 Windows/macOS 设备'],
+          suitable: '非技术用户、快速体验',
+          requirements: ['Windows 10+ / macOS 10.15+', 'Coze 桌面客户端', '稳定的网络连接'],
+          envs: [
+            { key: 'agent_name', label: 'Agent 名称', placeholder: '你的 Agent 名称' },
+            { key: 'project_path', label: '项目路径（可选）', placeholder: '本地项目目录路径' },
+          ],
+          steps: [
+            '下载并安装 Coze 桌面客户端',
+            '登录你的 Coze 账号',
+            '进入「设备管理」绑定当前电脑',
+            '选择要运行的 Agent 并启动',
+            'Agent 即可在本地运行',
+          ],
+        },
+        {
+          id: 'docker',
+          icon: '🐳',
+          name: 'Docker 一键部署',
+          difficulty: 'medium',
+          difficultyLabel: '中等',
+          time: '15-30分钟',
+          desc: '使用 Docker Compose 一键部署开源版 Coze Studio，适合有 Docker 经验的用户。',
+          pros: ['隔离环境，不影响系统', '一键启动，配置简单', '开源版本，功能完整', '易于迁移和备份'],
+          suitable: '有 Docker 经验的开发者',
+          requirements: ['Docker 20.10+', 'Docker Compose v2+', '4GB+ 可用内存', '10GB+ 磁盘空间'],
+          envs: [
+            { key: 'project_name', label: '项目名称', placeholder: 'my-coze-agent' },
+            { key: 'port', label: '服务端口', placeholder: '8080' },
+            { key: 'docker_image', label: 'Docker 镜像', placeholder: 'coze/coze-studio:latest' },
+            { key: 'api_key', label: 'API Key（可选）', placeholder: '你的 API Key' },
+          ],
+          steps: [
+            '安装 Docker 和 Docker Compose',
+            '克隆 Coze Studio 开源仓库',
+            '配置 docker-compose.yml 文件',
+            '运行 docker compose up -d 启动服务',
+            '访问 http://localhost:端口 验证服务',
+          ],
+        },
+        {
+          id: 'source',
+          icon: '💻',
+          name: '源码手动部署',
+          difficulty: 'hard',
+          difficultyLabel: '困难',
+          time: '30-60分钟',
+          desc: '从源码构建并运行 Coze Agent，适合需要深度定制的开发者。',
+          pros: ['完全掌控代码', '可深度定制', '适合二次开发', '调试最方便'],
+          suitable: '开发者、需要定制功能',
+          requirements: ['Git', 'Python 3.10+ / Node.js 18+', 'pip / pnpm', '4GB+ 可用内存'],
+          envs: [
+            { key: 'project_name', label: '项目名称', placeholder: 'my-coze-agent' },
+            { key: 'project_path', label: '安装路径', placeholder: '/path/to/install' },
+            { key: 'port', label: '服务端口', placeholder: '8080' },
+            { key: 'api_key', label: 'API Key', placeholder: '你的 API Key' },
+          ],
+          steps: [
+            '安装 Git、Python、Node.js 等依赖',
+            '克隆 Coze Studio 源码仓库',
+            '安装后端依赖（pip install -r requirements.txt）',
+            '安装前端依赖（pnpm install）',
+            '配置环境变量文件 .env',
+            '启动后端服务和前端服务',
+            '访问 http://localhost:端口 验证',
+          ],
+        },
+      ],
     }
   },
   computed: {
@@ -1643,6 +1854,147 @@ npm config set registry https://registry.npmmirror.com`,
     }
   },
   methods: {
+    // ===== 本地Agent部署 =====
+    selectLocalAgentMethod(methodId) {
+      this.selectedLocalAgentMethod = methodId
+      this.localAgentScript = ''
+    },
+    getSelectedMethodInfo() {
+      return this.localAgentMethods.find(m => m.id === this.selectedLocalAgentMethod) || {}
+    },
+    async generateLocalAgentScript() {
+      this.localAgentGenerating = true
+      try {
+        const method = this.getSelectedMethodInfo()
+        const res = await axios.post('/api/local-agent/generate-script', {
+          method: this.selectedLocalAgentMethod,
+          config: this.localAgentConfig,
+        })
+        if (res.data.ok) {
+          this.localAgentScript = res.data.script
+        } else {
+          this.$message.error(res.data.msg || '生成失败')
+        }
+      } catch (e) {
+        this.$message.error('生成脚本失败：' + (e.response?.data?.msg || e.message))
+      } finally {
+        this.localAgentGenerating = false
+      }
+    },
+    copyLocalAgentScript() {
+      navigator.clipboard.writeText(this.localAgentScript)
+      this.$message.success('已复制到剪贴板')
+    },
+    downloadLocalAgentScript() {
+      const method = this.getSelectedMethodInfo()
+      const ext = this.selectedLocalAgentMethod === 'docker' ? 'sh' : this.selectedLocalAgentMethod === 'coze_desktop' ? 'ps1' : 'sh'
+      const blob = new Blob([this.localAgentScript], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `deploy_${this.selectedLocalAgentMethod}.${ext}`
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    showInstallGuide(type) {
+      const guides = {
+        docker: {
+          title: '🐳 Docker 安装指南',
+          content: `
+            <h4>Windows</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item">下载 <a href="https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" target="_blank">Docker Desktop</a></li>
+              <li class="guide-step-item">运行安装程序，按提示完成安装</li>
+              <li class="guide-step-item">重启电脑后启动 Docker Desktop</li>
+              <li class="guide-step-item">验证：<code>docker --version</code></li>
+            </ol>
+            <h4>macOS</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item"><code>brew install --cask docker</code></li>
+              <li class="guide-step-item">或在官网下载 Docker Desktop for Mac</li>
+            </ol>
+            <h4>Linux (Ubuntu/Debian)</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item"><code>curl -fsSL https://get.docker.com | sh</code></li>
+              <li class="guide-step-item"><code>sudo usermod -aG docker $USER</code></li>
+              <li class="guide-step-item">重新登录使组生效</li>
+            </ol>
+            <div class="guide-notes"><h4>⚠️ 注意</h4><ul><li>Windows 需要启用 WSL2 或 Hyper-V</li><li>Docker Compose 已内置于 Docker Desktop</li></ul></div>
+          `,
+        },
+        git: {
+          title: '📦 Git 安装指南',
+          content: `
+            <h4>Windows</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item">下载 <a href="https://git-scm.com/download/win" target="_blank">Git for Windows</a></li>
+              <li class="guide-step-item">运行安装程序，使用默认选项</li>
+              <li class="guide-step-item">验证：<code>git --version</code></li>
+            </ol>
+            <h4>macOS</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item"><code>xcode-select --install</code></li>
+              <li class="guide-step-item">或 <code>brew install git</code></li>
+            </ol>
+            <h4>Linux</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item"><code>sudo apt install git</code> (Debian/Ubuntu)</li>
+              <li class="guide-step-item"><code>sudo yum install git</code> (CentOS/RHEL)</li>
+            </ol>
+          `,
+        },
+        coze: {
+          title: '🤖 Coze 桌面客户端安装指南',
+          content: `
+            <h4>下载安装</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item">访问 <a href="https://www.coze.cn" target="_blank">coze.cn</a></li>
+              <li class="guide-step-item">下载对应系统的桌面客户端（Windows / macOS）</li>
+              <li class="guide-step-item">安装并登录你的 Coze 账号</li>
+            </ol>
+            <h4>绑定本地设备</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item">打开 Coze 桌面客户端</li>
+              <li class="guide-step-item">进入「设置」→「设备管理」</li>
+              <li class="guide-step-item">点击「绑定当前设备」</li>
+              <li class="guide-step-item">在 Coze 平台选择已绑定的设备运行 Agent</li>
+            </ol>
+            <div class="guide-notes"><h4>💡 提示</h4><ul><li>绑定设备后，可在云端直接下发 Agent 到本地运行</li><li>连接失败时检查服务状态，重启电脑后等待自启完成</li></ul></div>
+          `,
+        },
+        python: {
+          title: '🐍 Python 安装指南',
+          content: `
+            <h4>Windows</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item">下载 <a href="https://www.python.org/downloads/" target="_blank">Python 3.10+</a></li>
+              <li class="guide-step-item">安装时勾选「Add Python to PATH」</li>
+              <li class="guide-step-item">验证：<code>python --version</code></li>
+            </ol>
+            <h4>macOS</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item"><code>brew install python@3.11</code></li>
+              <li class="guide-step-item">或从官网下载安装包</li>
+            </ol>
+            <h4>Linux</h4>
+            <ol class="guide-steps-list">
+              <li class="guide-step-item"><code>sudo apt install python3 python3-pip python3-venv</code></li>
+            </ol>
+            <div class="guide-notes"><h4>⚠️ 注意</h4><ul><li>建议 Python 3.10 或更高版本</li><li>建议使用虚拟环境隔离依赖</li></ul></div>
+          `,
+        },
+      }
+      const guide = guides[type]
+      if (guide) {
+        this.installGuideTitle = guide.title
+        this.installGuideContent = guide.content
+        this.installGuideVisible = true
+      }
+    },
+    getRequiredEnvs(method) {
+      return method ? method.envs.filter(e => !e.optional) : []
+    },
+
     // ===== PWA =====
     async installPWA() {
       if (!this.deferredPrompt) return
@@ -3234,5 +3586,55 @@ npm config set registry https://registry.npmmirror.com`,
 .envsetup-step-list { margin-top: 20px; display: flex; flex-direction: column; gap: 12px; }
 .envsetup-step-item { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; background: var(--bg-tertiary); border-radius: 8px; }
 .envsetup-step-badge { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-orange); color: #fff; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+
+/* ===== 本地Agent部署 ===== */
+.section-desc { color: #8b949e; font-size: 14px; margin-top: 4px; }
+.method-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 20px; }
+.method-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 24px; cursor: pointer; transition: all 0.3s; }
+.method-card:hover { border-color: var(--accent-blue, #58a6ff); background: rgba(88,166,255,0.05); transform: translateY(-2px); }
+.method-icon { font-size: 36px; margin-bottom: 12px; }
+.method-card h3 { margin: 0 0 8px; font-size: 18px; color: #e6edf3; }
+.method-meta { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.method-difficulty { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: rgba(255,255,255,0.1); color: #8b949e; }
+.diff-easy { background: rgba(63,185,80,0.15); color: #3fb950; }
+.diff-medium { background: rgba(210,153,34,0.15); color: #d29922; }
+.diff-hard { background: rgba(248,81,73,0.15); color: #f85149; }
+.method-time { font-size: 12px; color: #8b949e; }
+.method-desc { color: #8b949e; font-size: 14px; margin: 0 0 12px; line-height: 1.5; }
+.method-pros { list-style: none; padding: 0; margin: 0 0 12px; }
+.method-pros li { font-size: 13px; color: #c9d1d9; margin-bottom: 4px; }
+.method-suitable { font-size: 12px; color: var(--accent-blue, #58a6ff); border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; }
+.method-detail-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.method-detail-header h3 { margin: 0; font-size: 20px; color: #e6edf3; }
+.back-btn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #c9d1d9; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+.back-btn:hover { background: rgba(255,255,255,0.15); }
+.hw-requirements { display: flex; gap: 16px; flex-wrap: wrap; color: #8b949e; font-size: 14px; }
+.env-tags { display: flex; gap: 12px; flex-wrap: wrap; }
+.env-tag-item { display: flex; flex-direction: column; gap: 4px; min-width: 200px; flex: 1; }
+.env-tag-item label { font-size: 13px; color: #8b949e; }
+.env-input { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 8px 12px; color: #e6edf3; font-size: 14px; }
+.env-input:focus { outline: none; border-color: var(--accent-blue, #58a6ff); }
+.steps-list { display: flex; flex-direction: column; gap: 10px; }
+.step-item { display: flex; align-items: flex-start; gap: 12px; color: #c9d1d9; font-size: 14px; line-height: 1.5; }
+.step-num { background: var(--accent-blue, #58a6ff); color: #fff; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.script-output-section { margin-top: 24px; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; overflow: hidden; }
+.output-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.1); }
+.output-header h4 { margin: 0; color: #e6edf3; font-size: 14px; }
+.output-actions { display: flex; gap: 8px; }
+.script-content { margin: 0; padding: 16px; background: rgba(0,0,0,0.3); color: #c9d1d9; font-family: 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; max-height: 500px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+.install-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-top: 16px; }
+.install-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 16px; cursor: pointer; transition: all 0.2s; text-align: center; }
+.install-card:hover { border-color: var(--accent-blue, #58a6ff); background: rgba(88,166,255,0.05); }
+.install-icon { font-size: 32px; margin-bottom: 8px; }
+.install-card h4 { margin: 0 0 4px; font-size: 14px; color: #e6edf3; }
+.install-card p { margin: 0 0 8px; font-size: 12px; color: #8b949e; }
+.install-guide-content { color: #c9d1d9; line-height: 1.8; }
+.guide-steps-list { margin-bottom: 16px; }
+.guide-step-item { margin-bottom: 8px; padding-left: 8px; }
+.guide-step-item code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-family: 'Fira Code', 'Consolas', monospace; font-size: 13px; color: #79c0ff; }
+.guide-notes { margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); }
+.guide-notes h4 { color: #e6edf3; margin-bottom: 8px; }
+.guide-notes ul { padding-left: 20px; }
+.guide-notes li { color: #8b949e; margin-bottom: 4px; font-size: 13px; }
 
 </style>
